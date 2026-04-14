@@ -16,6 +16,7 @@ T = TypeVar("T")
 @dataclass
 class QueryParam:
     mode: Literal["local", "global", "hybrid", "naive"] = "hybrid"
+    subgraph_selector: Literal["union", "swhc", "graphrag"] = "union"
     only_need_context: bool = False
     only_need_prompt: bool = False
     response_type: str = "Multiple Paragraphs"
@@ -30,6 +31,24 @@ class QueryParam:
     max_token_for_global_context: int = 4000
     # Number of tokens for the entity descriptions
     max_token_for_local_context: int = 4000
+    # SWHC configuration
+    swhc_candidate_hops: int = 2
+    swhc_seed_topk_entity: int = 8
+    swhc_seed_topk_hyperedge: int = 8
+    swhc_hard_terminal_topk: int = 8
+    swhc_alpha: float = 1.0
+    swhc_beta: float = 0.15
+    swhc_gamma: float = 0.05
+    swhc_bridge_max_iters: int = 20
+    swhc_min_gain: float = 1e-3
+    swhc_enable_prune: bool = True
+    swhc_budget_nodes: int = 80
+    swhc_return_debug: bool = False
+    # GraphRAG-style baseline configuration
+    graphrag_seed_topk_entity: int = 8
+    graphrag_seed_topk_hyperedge: int = 8
+    graphrag_max_pairs_per_hyperedge: int = 6
+    graphrag_return_debug: bool = False
 
 
 @dataclass

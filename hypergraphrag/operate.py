@@ -30,7 +30,9 @@ from .base import (
     TextChunkSchema,
     QueryParam,
 )
+from .graphrag_local import build_graphrag_context
 from .prompt import GRAPH_FIELD_SEP, PROMPTS
+from .swhc import format_swhc_context, solve_swhc
 
 
 def _safe_console_print(message: str, **kwargs):
@@ -503,9 +505,10 @@ async def kg_query(
 ) -> str:
     # Handle cache
     use_model_func = global_config["llm_model_func"]
-    args_hash = compute_args_hash(query_param.mode, query)
+    cache_mode = f"{query_param.mode}:{query_param.subgraph_selector}"
+    args_hash = compute_args_hash(cache_mode, query)
     cached_response, quantized, min_val, max_val = await handle_cache(
-        hashing_kv, args_hash, query, query_param.mode
+        hashing_kv, args_hash, query, cache_mode
     )
     if cached_response is not None:
         return cached_response
@@ -639,7 +642,7 @@ async def kg_query(
             quantized=quantized,
             min_val=min_val,
             max_val=max_val,
-            mode=query_param.mode,
+            mode=cache_mode,
         ),
     )
     return response
@@ -655,6 +658,90 @@ async def _build_query_context(
 ):
 
     ll_kewwords, hl_keywrds = query[0], query[1]
+    if query_param.subgraph_selector in {"swhc", "graphrag"}:
+        entity_seeds = []
+        hyperedge_seeds = []
+        effective_mode = query_param.mode
+        if effective_mode in ["local", "hybrid"]:
+            if ll_kewwords == "":
+                warnings.warn(
+                    "Low Level context is None. Return empty Low entity/relationship/source"
+                )
+                if effective_mode == "hybrid":
+                    effective_mode = "global"
+            else:
+                entity_seeds = await _retrieve_entity_seed_nodes(
+                    ll_kewwords,
+                    knowledge_graph_inst,
+                    entities_vdb,
+                    query_param,
+                )
+        if effective_mode in ["global", "hybrid"]:
+            if hl_keywrds == "":
+                warnings.warn(
+                    "High Level context is None. Return empty High entity/relationship/source"
+                )
+                if effective_mode == "hybrid":
+                    effective_mode = "local"
+            else:
+                hyperedge_seeds = await _retrieve_hyperedge_seed_nodes(
+                    hl_keywrds,
+                    knowledge_graph_inst,
+                    hyperedges_vdb,
+                    query_param,
+                )
+        if effective_mode == "local" and not entity_seeds and hyperedge_seeds:
+            logger.warning("No low level SWHC seeds found. Falling back to global seeds.")
+        if effective_mode == "global" and not hyperedge_seeds and entity_seeds:
+            logger.warning("No high level SWHC seeds found. Falling back to local seeds.")
+        if query_param.subgraph_selector == "swhc":
+            swhc_result = await solve_swhc(
+                knowledge_graph_inst,
+                text_chunks_db,
+                entity_seeds,
+                hyperedge_seeds,
+                query_param,
+                "gpt-4o",
+            )
+            if query_param.swhc_return_debug:
+                logger.info("SWHC debug: %s", json.dumps(swhc_result.debug, ensure_ascii=False))
+            entities_context, relations_context, text_units_context = await format_swhc_context(
+                swhc_result,
+                text_chunks_db,
+                query_param,
+            )
+        else:
+            (
+                entities_context,
+                relations_context,
+                text_units_context,
+                graphrag_debug,
+            ) = await build_graphrag_context(
+                knowledge_graph_inst,
+                text_chunks_db,
+                entity_seeds,
+                hyperedge_seeds,
+                query_param,
+            )
+            if query_param.graphrag_return_debug:
+                logger.info(
+                    "GraphRAG baseline debug: %s",
+                    json.dumps(graphrag_debug, ensure_ascii=False),
+                )
+        return f"""
+-----Entities-----
+```csv
+{entities_context}
+```
+-----Relationships-----
+```csv
+{relations_context}
+```
+-----Sources-----
+```csv
+{text_units_context}
+```
+"""
     if query_param.mode in ["local", "hybrid"]:
         if ll_kewwords == "":
             ll_entities_context, ll_relations_context, ll_text_units_context = (
@@ -742,6 +829,80 @@ async def _build_query_context(
 """
 
 
+def _normalize_seed_scores(values: list[float]) -> list[float]:
+    if not values:
+        return []
+    min_v = min(values)
+    max_v = max(values)
+    if abs(max_v - min_v) < 1e-8:
+        return [1.0 for _ in values]
+    return [(value - min_v) / (max_v - min_v) for value in values]
+
+
+async def _retrieve_entity_seed_nodes(
+    query,
+    knowledge_graph_inst: BaseGraphStorage,
+    entities_vdb: BaseVectorStorage,
+    query_param: QueryParam,
+):
+    results = await entities_vdb.query(query, top_k=query_param.top_k)
+    if not len(results):
+        return []
+    node_datas = await asyncio.gather(
+        *[knowledge_graph_inst.get_node(r["entity_name"]) for r in results]
+    )
+    if not all([n is not None for n in node_datas]):
+        logger.warning("Some nodes are missing, maybe the storage is damaged")
+    node_degrees = await asyncio.gather(
+        *[knowledge_graph_inst.node_degree(r["entity_name"]) for r in results]
+    )
+    valid_results = [
+        {**n, "node_id": k["entity_name"], "entity_name": k["entity_name"], "rank": d, "distance": k.get("distance", 0.0)}
+        for k, n, d in zip(results, node_datas, node_degrees)
+        if n is not None
+    ]
+    normalized_scores = _normalize_seed_scores(
+        [float(item.get("distance", 0.0)) for item in valid_results]
+    )
+    for item, seed_score in zip(valid_results, normalized_scores):
+        item["seed_score"] = seed_score
+    return valid_results
+
+
+async def _retrieve_hyperedge_seed_nodes(
+    keywords,
+    knowledge_graph_inst: BaseGraphStorage,
+    hyperedges_vdb: BaseVectorStorage,
+    query_param: QueryParam,
+):
+    results = await hyperedges_vdb.query(keywords, top_k=query_param.top_k)
+    if not len(results):
+        return []
+    edge_datas = await asyncio.gather(
+        *[knowledge_graph_inst.get_node(r["hyperedge_name"]) for r in results]
+    )
+    if not all([n is not None for n in edge_datas]):
+        logger.warning("Some edges are missing, maybe the storage is damaged")
+    valid_results = [
+        {
+            **v,
+            "node_id": k["hyperedge_name"],
+            "hyperedge": k["hyperedge_name"],
+            "hyperedge_name": k["hyperedge_name"],
+            "rank": k.get("distance", 0.0),
+            "distance": k.get("distance", 0.0),
+        }
+        for k, v in zip(results, edge_datas)
+        if v is not None
+    ]
+    normalized_scores = _normalize_seed_scores(
+        [float(item.get("distance", 0.0)) for item in valid_results]
+    )
+    for item, seed_score in zip(valid_results, normalized_scores):
+        item["seed_score"] = seed_score
+    return valid_results
+
+
 async def _get_node_data(
     query,
     knowledge_graph_inst: BaseGraphStorage,
@@ -749,26 +910,11 @@ async def _get_node_data(
     text_chunks_db: BaseKVStorage[TextChunkSchema],
     query_param: QueryParam,
 ):
-    # get similar entities
-    results = await entities_vdb.query(query, top_k=query_param.top_k)
-    if not len(results):
+    node_datas = await _retrieve_entity_seed_nodes(
+        query, knowledge_graph_inst, entities_vdb, query_param
+    )
+    if not len(node_datas):
         return "", "", ""
-    # get entity information
-    node_datas = await asyncio.gather(
-        *[knowledge_graph_inst.get_node(r["entity_name"]) for r in results]
-    )
-    if not all([n is not None for n in node_datas]):
-        logger.warning("Some nodes are missing, maybe the storage is damaged")
-
-    # get entity degree
-    node_degrees = await asyncio.gather(
-        *[knowledge_graph_inst.node_degree(r["entity_name"]) for r in results]
-    )
-    node_datas = [
-        {**n, "entity_name": k["entity_name"], "rank": d}
-        for k, n, d in zip(results, node_datas, node_degrees)
-        if n is not None
-    ]  # what is this text_chunks_db doing.  dont remember it in airvx.  check the diagram.
     # get entitytext chunk
     use_text_units = await _find_most_related_text_unit_from_entities(
         node_datas, query_param, text_chunks_db, knowledge_graph_inst
@@ -945,25 +1091,11 @@ async def _get_edge_data(
     text_chunks_db: BaseKVStorage[TextChunkSchema],
     query_param: QueryParam,
 ):
-    results = await hyperedges_vdb.query(keywords, top_k=query_param.top_k)
-
-    if not len(results):
-        return "", "", ""
-
-    edge_datas = await asyncio.gather(
-        *[knowledge_graph_inst.get_node(r["hyperedge_name"]) for r in results]
+    edge_datas = await _retrieve_hyperedge_seed_nodes(
+        keywords, knowledge_graph_inst, hyperedges_vdb, query_param
     )
-
-    if not all([n is not None for n in edge_datas]):
-        logger.warning("Some edges are missing, maybe the storage is damaged")
-    # edge_degree = await asyncio.gather(
-    #     *[knowledge_graph_inst.node_degree(r["hyperedge_name"]) for r in results]
-    # )
-    edge_datas = [
-        {"hyperedge": k["hyperedge_name"], "rank": k["distance"], **v}
-        for k, v in zip(results, edge_datas)
-        if v is not None
-    ]
+    if not len(edge_datas):
+        return "", "", ""
     edge_datas = sorted(
         edge_datas, key=lambda x: (x["rank"], x["weight"]), reverse=True
     )
