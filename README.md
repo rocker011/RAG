@@ -50,6 +50,14 @@ print(result)
 
 > For evaluation, please refer to the [evaluation](./evaluation/README.md) folder.
 
+## Repository Layout
+
+- `hypergraphrag/`: core baseline package plus method extensions such as `swhc.py`
+- `evaluation/`: experiment workspace, method runners, scoring scripts, and dual realtime/batch backends
+- `docs/`: project documentation, reports, and figures
+- `REPO_STRUCTURE.md`: repository organization notes
+- `evaluation/STRUCTURE.md`: experiment directory convention for datasets, methods, results, and future baselines
+
 ## BibTex
 
 If you find this work is helpful for your research, please cite:
