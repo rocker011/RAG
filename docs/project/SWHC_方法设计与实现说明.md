@@ -52,6 +52,47 @@ SWHC 只改 **查询阶段的上下文组装**：
 - `D:\PythonProjects\HyperGraphRAG\evaluation\methods\swhc.py`
 - 兼容脚本：`D:\PythonProjects\HyperGraphRAG\evaluation\script_swhc.py`
 
+### 2.3 原始 HyperGraphRAG 检索后的输出形式
+
+这里有一个很容易误解的点：`HyperGraphRAG` 在 `local / global / hybrid` 检索之后，**并不会把图对象或向量直接交给大模型**。真正喂给 LLM 的，是一段文本化的结构上下文，主要由三部分组成：
+
+1. `Entities`
+2. `Relationships`
+3. `Sources`
+
+这三部分在代码里会被组织成 CSV 字符串，然后拼成最终的 `context_data`，再填入生成 prompt。
+
+可以粗略理解为：
+
+- 向量：只用于前面的 seed 召回
+- 图：只用于前面的邻域扩展和 source 回收
+- LLM 最终看到的是：**表格化文本**
+
+一个最小示意例如下：
+
+```text
+-----Entities-----
+id,entity,type,description
+0,RENAL DENERVATION,PROCEDURE,A catheter-based procedure to lower blood pressure
+1,RESISTANT HYPERTENSION,DISEASE,Hypertension uncontrolled by a standard three-drug regimen
+
+-----Relationships-----
+id,hyperedge,related_entities
+0,"renal denervation may be considered for resistant hypertension","RENAL DENERVATION|RESISTANT HYPERTENSION"
+
+-----Sources-----
+id,content
+0,"Renal denervation may be considered in selected patients with uncontrolled resistant hypertension ..."
+```
+
+因此，原始 `HyperGraphRAG` 的 `hybrid` 也不是“把整个图交给模型”，而是：
+
+- 先分别得到 local 的 `Entities / Relationships / Sources`
+- 再分别得到 global 的 `Entities / Relationships / Sources`
+- 最后把它们去重合并，拼成一段文本上下文交给 LLM
+
+这也是 `SWHC` 可以无缝接入现有评测链的原因：它虽然改变了检索后的组装方式，但最终输出的仍然是兼容 `Entities / Relationships / Sources` 格式的上下文。
+
 ---
 
 ## 3. 运行时实际生效的代码位置
@@ -190,6 +231,388 @@ SWHC 的实现是一个 practical heuristic version，不追求完全复现 MWC 
 1. `wiener` 项：terminal 间在子图中的加权距离
 2. `node_cost` 项：节点 token 成本 + 语义惩罚
 3. `size_penalty` 项：控制子图规模
+
+### 改进版 Wiener 项
+
+设：
+
+  - $T_q$ 表示 query $q$ 对应的 terminal 集合
+  - $H$ 表示最终选出的证据子图
+  - $\pi_q(t)$ 表示 terminal $t$ 的归一化重要性权重
+  - $d_H^{\text{sem}}(u,v)$ 表示在子图 $H$ 中、按语义加权边代价计算得到的最短路距离
+
+则 SWHC 使用的改进版 Wiener 项可以写成：
+
+$$
+W_{\text{SWHC}}(H \mid q)
+=
+\sum_{u,v \in T_q,\; u < v}
+\pi_q(u)\,\pi_q(v)\,d_H^{\text{sem}}(u,v)
+$$
+
+这个式子和标准 Wiener index 的区别有两点：
+
+1. 它**只对 query 相关的 terminals 求和**，而不是对整张子图中所有节点求和；
+2. 它引入了 **terminal 权重** 和 **语义加权距离**，因此更符合 RAG 场景里的“重要证据优先”和“相关路径优先”。
+
+可以把这一项理解成：
+
+> 对当前 query 最重要的那些节点，如果它们在最终子图里彼此很远，那么这个子图就不好；如果它们能通过一条较短、较可信的路径被连接起来，那么这个子图就更适合作为最终证据结构。
+
+其中几项的直觉如下：
+
+- $T_q$：当前 query 下最重要的 terminal 集合。它不是整张图里的所有节点，而是从召回结果里进一步挑出的关键节点。
+- $\pi_q(t)$：terminal $t$ 的重要性权重。越像 query 真正关心的核心点，权重越大。
+- $d_H^{\text{sem}}(u,v)$：不是普通 hop 距离，而是“按语义加权边代价计算出来的最短路距离”。
+
+因此，这一项实际上在表达：
+
+> 让最重要的 terminals 在最终子图里尽量靠近，而且这种“靠近”要沿着语义更可信的路径实现。
+
+### 语义加权距离
+
+在当前实现里，候选图中的边会先被写入一个 `swhc_weight`。如果记边 `e=(i,j)` 的原始置信权重为 `conf(i,j)`，节点语义分数为 `s(i), s(j)`，则当前实现对应的边代价可近似写成：
+
+$$
+w_{\text{sem}}(i,j)
+=
+\max\left(
+ \varepsilon,\;
+\frac{1}{\sqrt{\max(conf(i,j),1)}}
++
+\left(1 - \frac{s(i)+s(j)}{2}\right)
++
+c_{\text{hop}}
+\right)
+$$
+
+于是：
+
+$$
+d_H^{\text{sem}}(u,v)
+=
+\operatorname{ShortestPath}_{H}(u,v; w_{\text{sem}})
+$$
+
+直觉上，这意味着：
+
+- 边的原始置信度越高，路径代价越低；
+- 路径经过的节点语义分数越高，路径代价越低；
+- 因此最短路不再只是“hop 最短”，而是“更偏向语义可信路径”的最短路。
+
+这一项拆开看更容易理解：
+
+1. $\frac{1}{\sqrt{\max(conf(i,j),1)}}$
+   - 表示边本身的“置信度代价”
+   - 边越可靠，代价越低
+   - 这里用开根号做平滑，是为了强调高置信边，但又不让极端大权重完全支配路径选择
+
+2. $1 - \frac{s(i)+s(j)}{2}$
+   - 表示两端节点的语义惩罚
+   - 如果两端节点都更相关，这项更小
+   - 如果两端节点语义弱，这项更大
+
+3. $c_{\text{hop}}$
+   - 表示每走一条边的基础 traversal 成本
+   - 它让路径代价不仅由“边置信度”和“节点语义”决定，还显式考虑 hop 本身的代价
+
+4. $\max(\varepsilon,\cdot)$
+   - 给边代价加一个下界
+   - 防止出现几乎“零成本”的边，保持最短路搜索稳定
+
+所以，$w_{\text{sem}}(i,j)$ 的设计目标是：
+
+> 让路径不仅结构可达，而且更愿意经过“高置信边 + 高语义节点”，同时不过度奖励过长的桥接路径。
+
+### 完整目标函数
+
+在此基础上，SWHC 的当前实现可以形式化为：
+
+$$
+J(H \mid q)
+=
+\alpha \, W_{\text{SWHC}}(H \mid q)
++
+\beta \sum_{v \in V(H)}
+\left(
+\frac{\text{Tok}(v)}{256}
++
+1 - s(v)
+\right)
++
+\gamma |V(H)|
+$$
+
+其中：
+
+  - $\text{Tok}(v)$ 表示节点文本的 token 成本；
+  - $s(v)$ 表示节点语义分数；
+  - $|V(H)|$ 表示子图节点数；
+  - $\alpha,\beta,\gamma$ 分别对应：
+  - `swhc_alpha`
+  - `swhc_beta`
+  - `swhc_gamma`
+
+这个目标函数的含义可以理解为：
+
+1. 第一项鼓励重要 terminals 之间在子图里更接近；
+2. 第二项惩罚高 token 成本、低语义质量的节点；
+3. 第三项惩罚子图过大，避免上下文无节制膨胀。
+
+这三项分别解决的是三个不同问题：
+
+1. **结构问题**
+   - terminals 是否被组织成一个紧凑的子图
+   - 对应第一项 $W_{\text{SWHC}}(H \mid q)$
+
+2. **内容问题**
+   - 被保留的节点是否过长、是否不够相关
+   - 对应第二项 `node_cost`
+
+3. **规模问题**
+   - 即使每个节点都不算太差，整张图会不会仍然过大
+   - 对应第三项 `size_penalty`
+
+如果没有后两项，只优化 Wiener 项，系统容易不断加入桥接节点来缩短 terminal 距离，最后得到一个“图上很好看、但给 LLM 太贵”的结果。  
+所以 SWHC 的完整目标本质上是在做三方平衡：
+
+- 结构紧凑
+- 语义相关
+- 上下文可控
+
+### 与当前代码的对应关系
+
+当前实现中，对应关系如下：
+
+- $W_{\text{SWHC}}(H \mid q)$  
+    对应 `_compute_objective(...)` 里对 terminal pair 的加权距离求和
+- $\pi_q(t)$  
+    对应 `_compute_terminal_weights(...)`
+  - $s(v)$  
+    对应 `_derive_node_scores(...)`
+- $w_{\text{sem}}(i,j)$  
+    对应 `_add_semantic_edge_weights(...)`
+- 第二项的 token 成本与语义惩罚  
+    对应 `_compute_objective(...)` 中的 `node_cost`
+- 第三项  
+    对应 `_compute_objective(...)` 中的 `size_penalty`
+
+因此，虽然当前实现不是严格的理论近似算法，但已经对应了一个相对清晰的“语义加权 Wiener + 成本正则”目标。
+
+### 当前默认参数
+
+当前实现里的默认参数是：
+
+- $\alpha = 1.0$
+- $\beta = 0.15$
+- $\gamma = 0.05$
+- $\varepsilon = 0.05$
+- $c_{\text{hop}} = 0.25$
+
+对应代码位置：
+
+- `D:\PythonProjects\HyperGraphRAG\evaluation\hypergraphrag\base.py`
+
+即：
+
+- `swhc_alpha: float = 1.0`
+- `swhc_beta: float = 0.15`
+- `swhc_gamma: float = 0.05`
+- `swhc_edge_weight_floor: float = 0.05`
+- `swhc_hop_cost: float = 0.25`
+
+这组默认值的含义是：
+
+- 最重视结构紧凑性（Wiener 项）
+- 其次关注节点的 token 成本与语义质量
+- 最后对整体节点数做一个较轻的额外约束
+- 边权内部再通过一个较小的 $\varepsilon$ 保持稳定，并通过 $c_{\text{hop}}$ 显式控制 hop 成本
+
+也就是说，当前默认策略是：
+
+> 先保证关键 terminals 连接得足够好，再适度惩罚“长且不相关”的节点，同时避免图规模失控。
+
+### 每个参数怎么理解
+
+#### $\alpha$：结构紧凑项的权重
+
+它控制：
+
+- terminal 间距离在目标函数里有多重要
+
+调大后：
+
+- 更偏向让 terminals 彼此更近
+- 更愿意为了缩短路径引入桥接节点
+
+调小后：
+
+- 更不执着于 terminals 的紧密连接
+- 更像一个偏内容筛选的模型
+
+#### $\beta$：节点内容成本的权重
+
+它控制：
+
+- token 成本和语义惩罚在目标函数里有多重要
+
+调大后：
+
+- 更偏向短小、相关的节点
+- 更容易压缩上下文
+- 但也更容易把有用的桥接节点剪掉
+
+调小后：
+
+- 对长节点和弱相关节点更宽容
+- 子图可能更完整，但也更容易膨胀
+
+#### $\gamma$：整体规模惩罚的权重
+
+它控制：
+
+- 子图节点数量本身有多重要
+
+调大后：
+
+- 更偏向小图
+- 更容易压缩节点数
+- 但过大时会伤害多跳链路，尤其是 `3-hop`
+
+调小后：
+
+- 对子图规模更宽容
+- 更容易保留辅助连接节点
+
+#### $\varepsilon$：边权下界
+
+它控制：
+
+- 单条边最小可以有多便宜
+
+当前默认值为：
+
+- $\varepsilon = 0.05$
+
+一般不建议大幅调整，因为它主要是一个数值稳定项，而不是核心建模项。
+
+#### $c_{\text{hop}}$：基础 hop 成本
+
+它控制：
+
+- 每跨过一条边是否需要额外付出固定代价
+
+当前默认值为：
+
+- $c_{\text{hop}} = 0.25$
+
+调大后：
+
+- 更偏好更短的路径
+- 更强地抑制多余桥接
+
+调小后：
+
+- 更容易接受稍长但语义上更好的路径
+- 子图往往更完整，但也更可能膨胀
+
+### 为什么需要同时有 $\beta$ 和 $\gamma$
+
+这两项看起来都在“压图”，但作用不一样：
+
+1. $\beta$ 是**节点级约束**
+   - 关注每个节点本身值不值得保留
+   - 惩罚长节点和低语义节点
+
+2. $\gamma$ 是**全局规模约束**
+   - 关注整张图是不是太大
+   - 即使每个节点都不算特别差，节点太多也要被惩罚
+
+所以：
+
+- 只有 $\beta$，会偏向保留很多“看起来还行但数量太多”的节点
+- 只有 $\gamma$，会偏向盲目缩图，却分不清高质量节点和低质量节点
+
+两者一起用，才能同时约束：
+
+- 节点质量
+- 图整体规模
+
+### 调参建议
+
+当前结果表明默认参数已经能跑出支持性结果，因此不建议一开始就大幅改动三个参数。  
+更稳妥的做法是：
+
+1. **先固定 $\alpha = 1.0$**
+   - 因为当前方法的核心仍然是 connector-style assembly
+   - 不建议先把结构项削弱
+
+2. **优先调 $\beta$**
+   - 因为当前最常见的问题不是“图完全连不好”，而是“是否压缩过强、是否删掉了有用外围信息”
+
+3. **再调 $\gamma$**
+   - 用来控制整体图规模是否过度膨胀或过度压缩
+
+4. **最后才微调 $\alpha$**
+   - 只有在你已经理解了上下文规模与 F1 / R-Sim 的关系后，再去调整结构项权重
+
+### 推荐的第一轮小范围搜索
+
+建议先固定：
+
+- $\alpha = 1.0$
+- $\varepsilon = 0.05$
+
+然后做一个小网格：
+
+- $\beta \in \{0.10, 0.15, 0.20\}$
+- $\gamma \in \{0.02, 0.05\}$
+- $c_{\text{hop}} \in \{0.20, 0.25, 0.30\}$
+
+这是一个比较稳妥的起点，因为：
+
+- 当前默认值 $(\alpha,\beta,\gamma,\varepsilon,c_{\text{hop}}) = (1.0, 0.15, 0.05, 0.05, 0.25)$ 已经有效
+- 不需要一下子把搜索空间拉太大
+- 先看 `2-hop` 是否改善、上下文是否反弹过多
+
+### 当前结果下的具体建议
+
+结合目前 `hypertension` 的结果：
+
+- `3-hop` 提升明显
+- `2-hop` 有轻微退化
+- 上下文压缩已经很强
+
+这说明当前默认参数大方向是对的，但可能存在**压缩略强**的问题。  
+因此下一步更值得尝试的是：
+
+1. $(\alpha,\beta,\gamma,c_{\text{hop}}) = (1.0, 0.10, 0.05, 0.25)$
+2. $(1.0, 0.15, 0.02, 0.25)$
+3. $(1.0, 0.10, 0.02, 0.20)$
+4. $(1.0, 0.20, 0.05, 0.30)$ 作为更保守压缩的对照组
+
+### 调参时重点观察什么
+
+建议至少同时记录：
+
+1. `EM`
+2. `F1`
+3. `R-Sim`
+4. 平均上下文 token 数
+5. 平均实体数 / 关系数 / sources 数
+6. `1-hop / 2-hop / 3-hop` 分组结果
+
+特别要看：
+
+- `3-hop` 是否继续保持优势
+- `2-hop` 是否能通过减小压缩强度得到修复
+- token 是否在可接受范围内反弹
+
+### 一句总结
+
+当前目标函数的调参不应该理解成“找最高分的黑盒搜索”，而应该理解成：
+
+> 在结构紧凑、语义相关和上下文预算之间，找到一个最适合当前任务和数据集的平衡点。
 
 对应代码：
 
@@ -529,4 +952,3 @@ SWHC 不是重新定义 HyperGraphRAG，而是把它从：
 - 方便做和 HyperGraphRAG 的直接对照实验
 
 从工程角度看，SWHC 是一个低侵入、可复用、易扩展的增强模块；从研究角度看，它把 HyperGraphRAG 的优势从“结构表示”进一步推进到了“结构化证据组装”。
-

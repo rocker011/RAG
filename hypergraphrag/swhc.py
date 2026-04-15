@@ -135,13 +135,20 @@ def _compute_objective(
     }
 
 
-def _add_semantic_edge_weights(candidate_graph: nx.Graph, node_scores: dict[str, float]) -> None:
+def _add_semantic_edge_weights(
+    candidate_graph: nx.Graph,
+    node_scores: dict[str, float],
+    query_param: QueryParam,
+) -> None:
     for left, right, edge_data in candidate_graph.edges(data=True):
         confidence = float(edge_data.get("weight", 1.0))
         semantic_bonus = (node_scores.get(left, 0.0) + node_scores.get(right, 0.0)) / 2.0
-        base_weight = 1.0 / max(confidence, 1.0) ** 0.25
-        semantic_penalty = 1.25 - semantic_bonus
-        edge_data["swhc_weight"] = max(0.05, base_weight + semantic_penalty)
+        base_weight = 1.0 / max(confidence, 1.0) ** 0.5
+        semantic_penalty = 1.0 - semantic_bonus
+        edge_data["swhc_weight"] = max(
+            query_param.swhc_edge_weight_floor,
+            base_weight + semantic_penalty + query_param.swhc_hop_cost,
+        )
 
 
 def _initialize_connector_subgraph(
@@ -407,7 +414,7 @@ async def solve_swhc(
         )
 
     node_scores = _derive_node_scores(candidate_graph, seed_scores)
-    _add_semantic_edge_weights(candidate_graph, node_scores)
+    _add_semantic_edge_weights(candidate_graph, node_scores, query_param)
 
     if not terminals:
         terminals = seed_nodes[: min(len(seed_nodes), query_param.swhc_hard_terminal_topk)]

@@ -39,6 +39,8 @@ class QueryParam:
     swhc_alpha: float = 1.0
     swhc_beta: float = 0.15
     swhc_gamma: float = 0.05
+    swhc_edge_weight_floor: float = 0.05
+    swhc_hop_cost: float = 0.25
     swhc_bridge_max_iters: int = 20
     swhc_min_gain: float = 1e-3
     swhc_enable_prune: bool = True
