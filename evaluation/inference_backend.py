@@ -19,8 +19,8 @@ from hypergraphrag.openai_config import (
     get_openai_base_url,
 )
 
-DEFAULT_GENERATION_MODEL = os.getenv("HGRAG_GENERATION_MODEL", "deepseek-v3")
-DEFAULT_JUDGE_MODEL = os.getenv("HGRAG_JUDGE_MODEL", "deepseek-r1")
+DEFAULT_GENERATION_MODEL = os.getenv("HGRAG_GENERATION_MODEL", "deepseek-chat")
+DEFAULT_JUDGE_MODEL = os.getenv("HGRAG_JUDGE_MODEL", "deepseek-reasoner")
 SUPPORTED_BATCH_MODELS = {"deepseek-v3", "deepseek-r1", "deepseek-r1-32b"}
 DEFAULT_BACKEND = os.getenv("HGRAG_INFERENCE_BACKEND", "realtime").strip().lower()
 DEFAULT_BATCH_STAGING_DIR = Path(__file__).resolve().parent / "batch_jobs"
@@ -59,7 +59,7 @@ class BaseInferenceBackend:
 class RealtimeInferenceBackend(BaseInferenceBackend):
     def __init__(self):
         api_key = ensure_openai_api_key()
-        base_url = get_openai_base_url(default="https://api.qnaigc.com/v1")
+        base_url = get_openai_base_url(default="https://api.deepseek.com")
         client_kwargs = {"api_key": api_key}
         if base_url is not None:
             client_kwargs["base_url"] = base_url
@@ -115,7 +115,12 @@ class RealtimeInferenceBackend(BaseInferenceBackend):
 class QiniuBatchInferenceBackend(BaseInferenceBackend):
     def __init__(self):
         self.api_key = ensure_openai_api_key()
-        self.base_url = get_openai_base_url(default="https://api.qnaigc.com/v1")
+        self.base_url = get_openai_base_url(default="https://api.deepseek.com")
+        if self.base_url and "api.deepseek.com" in self.base_url.rstrip("/"):
+            raise RuntimeError(
+                "DeepSeek official API does not expose the Qiniu batchjob endpoints used by this backend. "
+                "Please use the realtime backend with DeepSeek official API."
+            )
         self.session = requests.Session()
         self.session.headers.update({"Authorization": f"Bearer {self.api_key}"})
         self.poll_interval = int(os.getenv("HGRAG_BATCH_POLL_INTERVAL_SECONDS", "30"))

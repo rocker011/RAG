@@ -1,9 +1,9 @@
 ﻿# Evaluation Backends
 
-This repository now supports two inference backends for evaluation-time LLM calls:
+This repository supports two inference backends for evaluation-time LLM calls:
 
 - `realtime`: OpenAI-compatible online requests
-- `batch`: Qiniu AI Token batch inference jobs
+- `batch`: legacy Qiniu AI Token batch inference jobs
 
 ## Scope
 
@@ -26,13 +26,15 @@ That means we can keep the same model choice whether we use realtime or batch.
 
 Default models are:
 
-- generation: `deepseek-v3`
-- judge: `deepseek-r1`
+- generation: `deepseek-chat`
+- judge: `deepseek-reasoner`
 
 Rationale:
 
-- `deepseek-v3` is a strong general chat model and is supported by Qiniu batch inference.
-- `deepseek-r1` is stronger for rubric-based judging and is also supported by batch inference.
+- `deepseek-chat` is the default generation model when using the official DeepSeek API.
+- `deepseek-reasoner` is the default judge model for rubric-based evaluation.
+- When using the official DeepSeek API on `https://api.deepseek.com`, use the `realtime` backend.
+- The old `batch` backend depends on Qiniu-specific `/batchjob/inference` endpoints and is not available on the official DeepSeek API.
 
 If you want maximum comparability across runs, keep these model settings fixed for **all** methods.
 
@@ -49,8 +51,8 @@ If you want maximum comparability across runs, keep these model settings fixed f
 
 ### Model selection
 
-- `HGRAG_GENERATION_MODEL=deepseek-v3`
-- `HGRAG_JUDGE_MODEL=deepseek-r1`
+- `HGRAG_GENERATION_MODEL=deepseek-chat`
+- `HGRAG_JUDGE_MODEL=deepseek-reasoner`
 
 ### Realtime worker knobs
 
@@ -105,8 +107,8 @@ This is useful when that folder is already served or synced to your public URL h
 
 ```powershell
 $env:HGRAG_INFERENCE_BACKEND='realtime'
-$env:HGRAG_GENERATION_MODEL='deepseek-v3'
-$env:HGRAG_JUDGE_MODEL='deepseek-r1'
+$env:HGRAG_GENERATION_MODEL='deepseek-chat'
+$env:HGRAG_JUDGE_MODEL='deepseek-reasoner'
 python get_generation.py --data_sources hypertension --methods HyperGraphRAG,SWHC
 python get_score.py --data_source hypertension --method HyperGraphRAG
 ```
@@ -116,8 +118,8 @@ python get_score.py --data_source hypertension --method HyperGraphRAG
 ```powershell
 $env:HGRAG_GENERATION_BACKEND='realtime'
 $env:HGRAG_JUDGE_BACKEND='batch'
-$env:HGRAG_GENERATION_MODEL='deepseek-v3'
-$env:HGRAG_JUDGE_MODEL='deepseek-r1'
+$env:HGRAG_GENERATION_MODEL='deepseek-chat'
+$env:HGRAG_JUDGE_MODEL='deepseek-reasoner'
 $env:HGRAG_BATCH_INPUT_URL_TEMPLATE='https://your-public-host/hgrag-batch/{task_name}/{filename}'
 python get_generation.py --data_sources hypertension --methods GraphRAG
 python get_score.py --data_source hypertension --method GraphRAG
@@ -127,8 +129,8 @@ python get_score.py --data_source hypertension --method GraphRAG
 
 ```powershell
 $env:HGRAG_INFERENCE_BACKEND='batch'
-$env:HGRAG_GENERATION_MODEL='deepseek-v3'
-$env:HGRAG_JUDGE_MODEL='deepseek-r1'
+$env:HGRAG_GENERATION_MODEL='deepseek-chat'
+$env:HGRAG_JUDGE_MODEL='deepseek-reasoner'
 $env:HGRAG_BATCH_INPUT_URL_TEMPLATE='https://your-public-host/hgrag-batch/{task_name}/{filename}'
 python get_generation.py --data_sources hypertension --methods StandardRAG
 python get_score.py --data_source hypertension --method StandardRAG
@@ -149,6 +151,8 @@ Typical files:
 These files help debug failed jobs and preserve exact prompts used for batch submission.
 
 ## Current limitation
+
+If you switch fully to the official DeepSeek API, treat `realtime` as the supported backend.
 
 The batch backend assumes you already have a way to expose the staged JSONL file as a public URL.
 The code prepares the file and submits the job, but it does not include a cloud uploader yet.

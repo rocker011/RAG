@@ -4,10 +4,11 @@ from pathlib import Path
 from typing import Optional
 
 
-DEFAULT_OPENAI_CHAT_MODEL = "gpt-4o-mini"
-DEFAULT_OPENAI_EMBED_MODEL = "text-embedding-3-small"
+DEFAULT_OPENAI_CHAT_MODEL = "deepseek-chat"
 LOCAL_EMBED_MODEL_PREFIX = "local:"
 DEFAULT_LOCAL_EMBED_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+DEFAULT_OPENAI_EMBED_MODEL = f"{LOCAL_EMBED_MODEL_PREFIX}{DEFAULT_LOCAL_EMBED_MODEL}"
+DEFAULT_OPENAI_BASE_URL = "https://api.deepseek.com"
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "api_config.txt"
 
 
@@ -113,7 +114,7 @@ def get_openai_base_url(
     config_file: Optional[str] = None,
 ) -> Optional[str]:
     config_base_url = load_openai_config(config_file).base_url
-    return _clean_value(base_url) or config_base_url or _clean_value(default)
+    return _clean_value(base_url) or config_base_url or _clean_value(default) or DEFAULT_OPENAI_BASE_URL
 
 
 def get_openai_model(

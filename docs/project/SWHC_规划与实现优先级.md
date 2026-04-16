@@ -293,6 +293,33 @@
 
 ---
 
+### 6.3 建议补充的评价指标
+
+除当前已经在用的 `EM / F1 / R-Sim / Gen` 外，后续论文版实验建议补充以下指标：
+
+1. `Supporting Fact Recall / F1`
+   - 适用数据集：`HotpotQA`、`2WikiMultiHopQA`、`MuSiQue`
+   - 作用：更细粒度地评估检索或组装出的证据是否覆盖黄金 supporting facts，比当前整体文本相似度 `R-Sim` 更直接。
+
+2. `Average Context Tokens`
+   - 作用：统计平均上下文长度，正式衡量方法的上下文效率。
+   - 对 `SWHC` 尤其重要，因为它的核心卖点之一就是“在更小上下文下保持或提升效果”。
+
+3. `F1 per Token`
+   - 作用：衡量单位上下文预算带来的答案收益，可直接支持“更高上下文利用率”的论点。
+   - 可简单定义为：`overall_f1 / avg_context_tokens`，或统一缩放到每千 token。
+
+4. `Terminal / Source 数量`
+   - 作用：从结构层面衡量子图规模。
+   - `Terminal` 数量可以反映 query-time 关键节点的保留规模；`Source` 数量可以反映最终回传给 LLM 的原始证据片段规模。
+   - 这组指标特别适合用来支撑 `SWHC` 的“更紧凑 evidence assembly”故事。
+
+这些指标的定位是：
+
+- `EM / F1 / Gen`：答案质量
+- `Supporting Fact Recall / F1`、`R-Sim`：证据质量
+- `Average Context Tokens`、`F1 per Token`、`Terminal / Source 数量`：上下文效率与结构紧凑性
+
 ## 7. 实现与复现优先级
 
 下面按优先级排序，而不是按论文名称排序。

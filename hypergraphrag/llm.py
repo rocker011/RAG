@@ -559,7 +559,7 @@ async def gpt_4o_complete(
     if keyword_extraction:
         kwargs["response_format"] = GPTKeywordExtractionFormat
     return await openai_complete_if_cache(
-        get_openai_model(default="gpt-4o"),
+        get_openai_model(default="deepseek-chat"),
         prompt,
         system_prompt=system_prompt,
         history_messages=history_messages,
@@ -574,7 +574,7 @@ async def gpt_4o_mini_complete(
     if keyword_extraction:
         kwargs["response_format"] = GPTKeywordExtractionFormat
     return await openai_complete_if_cache(
-        get_openai_model(default="gpt-4o-mini"),
+        get_openai_model(default="deepseek-chat"),
         prompt,
         system_prompt=system_prompt,
         history_messages=history_messages,
@@ -856,6 +856,11 @@ async def openai_embedding(
     resolved_model = get_openai_embed_model(
         model=model, default="text-embedding-3-small"
     )
+    if resolved_base_url and "api.deepseek.com" in resolved_base_url.rstrip("/"):
+        raise RuntimeError(
+            "DeepSeek official API does not provide embedding endpoints for this project. "
+            "Use local embeddings such as local:Qwen/Qwen3-Embedding-0.6B or configure another embedding provider."
+        )
     client_kwargs = {"api_key": resolved_api_key}
     if resolved_base_url is not None:
         client_kwargs["base_url"] = resolved_base_url

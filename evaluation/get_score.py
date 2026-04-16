@@ -23,10 +23,26 @@ from inference_backend import (
 )
 
 score_workers = int(os.getenv("HGRAG_SCORE_WORKERS", "1"))
-judge_backend_kind = get_judge_backend_kind()
-judge_backend = get_backend(judge_backend_kind)
-judge_model = get_judge_model()
-judge_workers = get_judge_workers()
+
+
+def parse_bool(value: str | bool | None, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Unsupported boolean value: {value}")
+
+
+def resolve_enable_llm_judge(cli_value: str | None) -> bool:
+    if cli_value is not None:
+        return parse_bool(cli_value, default=True)
+    env_value = os.getenv("HGRAG_ENABLE_LLM_JUDGE")
+    return parse_bool(env_value, default=True)
 
 
 def extract_answer(generation: str) -> str:
@@ -87,14 +103,32 @@ def apply_judge_results(method: str, data_source: str, data: list[dict], respons
         sample['gen_exp'] = gen_score['explanation']
 
 
+def apply_skipped_judge_results(data: list[dict]) -> None:
+    for sample in data:
+        sample['gen'] = None
+        sample['gen_exp'] = None
+
+
 def evaluate_method(args):
     method = args.method
     data_source = args.data_source
+    enable_llm_judge = resolve_enable_llm_judge(args.enable_llm_judge)
     success_flag = False
 
     try:
         print(f"[DEBUG] Evaluating {method} on {data_source}")
-        print(f"[DEBUG] judge backend={judge_backend_kind} model={judge_model} workers={judge_workers}")
+        if enable_llm_judge:
+            judge_backend_kind = get_judge_backend_kind()
+            judge_backend = get_backend(judge_backend_kind)
+            judge_model = get_judge_model()
+            judge_workers = get_judge_workers()
+            print(f"[DEBUG] judge backend={judge_backend_kind} model={judge_model} workers={judge_workers}")
+        else:
+            judge_backend_kind = None
+            judge_backend = None
+            judge_model = None
+            judge_workers = 0
+            print("[DEBUG] llm judge disabled; Gen metric will be skipped")
         data_dir = f"results/{method}/{data_source}/test_generation.json"
         if not os.path.exists(data_dir):
             raise FileNotFoundError(f"File not found: {data_dir}")
@@ -108,24 +142,35 @@ def evaluate_method(args):
             with ThreadPoolExecutor(max_workers=score_workers) as executor:
                 data = list(tqdm(executor.map(evaluate_local_metrics, data), total=len(data), desc=f"{method}-local"))
 
-        judge_requests = build_judge_requests(method, data_source, data)
-        judge_responses = judge_backend.run_requests(
-            judge_requests,
-            model=judge_model,
-            task_name=f"judge-{method}-{data_source}",
-            workers=judge_workers,
-        )
-        apply_judge_results(method, data_source, data, judge_responses)
+        if enable_llm_judge:
+            judge_requests = build_judge_requests(method, data_source, data)
+            judge_responses = judge_backend.run_requests(
+                judge_requests,
+                model=judge_model,
+                task_name=f"judge-{method}-{data_source}",
+                workers=judge_workers,
+            )
+            apply_judge_results(method, data_source, data, judge_responses)
+        else:
+            apply_skipped_judge_results(data)
 
         overall_em = sum([sample['em'] for sample in data]) / len(data)
         overall_f1 = sum([sample['f1'] for sample in data]) / len(data)
         overall_rsim = sum([sample['rsim'] for sample in data]) / len(data)
-        overall_gen = sum([sample['gen'] for sample in data]) / len(data)
+        overall_gen = (
+            sum([sample['gen'] for sample in data if sample.get('gen') is not None])
+            / len([sample for sample in data if sample.get('gen') is not None])
+            if enable_llm_judge
+            else None
+        )
 
         print(f"{method} Overall EM: {overall_em:.4f}")
         print(f"{method} Overall F1: {overall_f1:.4f}")
         print(f"{method} Overall R-Sim: {overall_rsim:.4f}")
-        print(f"{method} Overall Gen: {overall_gen:.4f}")
+        if overall_gen is None:
+            print(f"{method} Overall Gen: skipped")
+        else:
+            print(f"{method} Overall Gen: {overall_gen:.4f}")
 
         save_base = f"results/{method}/{data_source}"
         os.makedirs(save_base, exist_ok=True)
@@ -142,6 +187,9 @@ def evaluate_method(args):
                     "overall_f1": overall_f1,
                     "overall_rsim": overall_rsim,
                     "overall_gen": overall_gen,
+                    "llm_judge_enabled": enable_llm_judge,
+                    "judge_backend": judge_backend_kind,
+                    "judge_model": judge_model,
                 },
                 f,
                 indent=4,
@@ -166,4 +214,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--method', type=str, default='HyperGraphRAG_wo_ER')
     parser.add_argument('--data_source', type=str, default='hypertension')
+    parser.add_argument(
+        '--enable_llm_judge',
+        type=str,
+        default=None,
+        help='Whether to compute Gen via LLM judge. Accepts true/false. '
+             'Can also be set via HGRAG_ENABLE_LLM_JUDGE.',
+    )
     evaluate_method(parser.parse_args())

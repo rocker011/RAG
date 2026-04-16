@@ -29,19 +29,33 @@ score_dictr ={
     "rsim": copy.deepcopy(score_dictr1),
     "gen": copy.deepcopy(score_dictr1)
 }
+
+
+def is_metric_available(metric_name: str) -> bool:
+    if metric_name == "gen":
+        return config.get("llm_judge_enabled", config.get("overall_gen") is not None)
+    return True
+
+
+def format_percent(value):
+    if value is None:
+        return "N/A"
+    return round(value * 100, 2)
     
 for d in data:
     if d["nary"] == 2:
         for key in score_dictr.keys():
-            score_dictr[key]["b"].append(d[key])
+            if is_metric_available(key) and d.get(key) is not None:
+                score_dictr[key]["b"].append(d[key])
     elif d["nary"] > 2:
         for key in score_dictr.keys():
-            score_dictr[key]["n"].append(d[key])
+            if is_metric_available(key) and d.get(key) is not None:
+                score_dictr[key]["n"].append(d[key])
             
 for key in score_dictr.keys():
     for k in score_dictr[key].keys():
         if len(score_dictr[key][k]) == 0:
-            score_dictr[key][k] = 0
+            score_dictr[key][k] = None
         else:
             score_dictr[key][k] = sum(score_dictr[key][k]) / len(score_dictr[key][k])
 print("Score Dictionary:")
@@ -49,13 +63,16 @@ print("Score Dictionary:")
 for key in score_dictr1:
     print(key)
     for k in score_dictr.keys():
-        print(k, round(score_dictr[k][key]*100,2))
+        print(k, format_percent(score_dictr[k][key]))
     print("=====================================")
 
 print("overall")
 for key in config.keys():
     if key != "overall_em":
-        print(key, round(config[key]*100,2))
+        if key in {"llm_judge_enabled", "judge_backend", "judge_model"}:
+            print(key, config[key])
+        else:
+            print(key, format_percent(config[key]))
 print("=====================================")
 
     

@@ -17,6 +17,7 @@
 - Step4 scoring:
   - `HGRAG_SCORE_WORKERS=2`
   - `HGRAG_GEN_METRIC_WORKERS=1`
+  - `HGRAG_ENABLE_LLM_JUDGE=false` if you want to skip `Gen` during intermediate experiments
 
 ## Step1 Build Graph
 ```powershell
@@ -57,6 +58,14 @@ set HGRAG_SCORE_WORKERS=2
 set HGRAG_GEN_METRIC_WORKERS=1
 python get_score.py --data_source hypertension --method HyperGraphRAG
 ```
+
+Skip LLM judge and only compute `EM / F1 / R-Sim`:
+```powershell
+set HGRAG_SCORE_WORKERS=2
+set HGRAG_ENABLE_LLM_JUDGE=false
+python get_score.py --data_source hypertension --method HyperGraphRAG --enable_llm_judge false
+```
+
 Expected outputs:
 - `results/HyperGraphRAG/hypertension/test_result.json`
 - `results/HyperGraphRAG/hypertension/test_score.json`

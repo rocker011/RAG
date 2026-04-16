@@ -95,6 +95,29 @@ id,content
 
 ---
 
+### 2.4 当前评价指标说明
+
+当前评测主链实际使用 4 个核心指标：
+
+- `EM`：Exact Match。对生成答案做归一化（小写、去标点、去冠词、规范空格）后，与任一 `golden_answers` 完全匹配则记为 1，否则为 0。
+- `F1`：token overlap F1。对归一化后的答案按词切分，与任一标准答案分别计算 token-level precision / recall / F1，取最大值。
+- `R-Sim`：retrieval similarity。将黄金支撑知识 `context` 拼接成文本，再与检索得到的 `knowledge` 做 SimCSE 相似度，衡量检索上下文与黄金证据的接近程度。
+- `Gen`：LLM judge 指标。对每条生成结果从 `comprehensiveness`、`knowledgeability`、`correctness`、`relevance`、`diversity`、`logical_coherence`、`factuality` 七个维度分别打分。judge prompt 会输入 `question`、`golden_answers` 和 `generation`，要求输出 `<score>0-10</score>` 与 `<explanation>...</explanation>`。代码中每个维度的最终分数不是纯 judge 分，而是 `((judge_score / 10) + F1) / 2`；最后再对 7 个维度求平均，得到 `Gen`。
+
+一个最小示意例如下：如果某条样本的 `F1=0.67`，judge 在 `correctness` 维度给出 `8/10`，那么该维度最终分数为：
+
+$$
+\frac{0.8 + 0.67}{2} = 0.735
+$$
+
+这样设计的直觉是：
+
+- `EM / F1` 评估答案是否答对；
+- `R-Sim` 评估检索结果是否接近黄金证据；
+- `Gen` 评估生成质量，但又用 `F1` 对 LLM judge 做一层约束，避免完全主观打分。
+
+---
+
 ## 3. 运行时实际生效的代码位置
 
 仓库里有两套实现：
@@ -627,6 +650,14 @@ $$
 ---
 
 ## 6. SWHC 的核心算法阶段
+
+当前 SWHC 不是通过梯度下降、精确组合优化或原始 Wiener Connector 论文中的近似算法来求解，而是采用一个 **practical heuristic solver**。它的基本思想是：先构造一个能连通 terminals 的初始子图，再通过贪心方式逐步加入有收益的桥接路径，最后删除无收益的冗余叶子节点。整个过程始终由目标函数打分驱动，因此虽然不是全局最优求解，但不是简单的启发式拼接。
+
+可以把当前求解过程概括为三步：
+
+1. **初始化**：基于 terminal 两两最短路构造一个初始 connector，保证子图连通且相对紧凑。
+2. **贪心改进**：反复尝试加入能显著降低目标函数的桥接路径，优先改善当前连接最差的 terminal 对。
+3. **剪枝精炼**：删除对目标函数没有正收益的非 terminal 叶子节点，得到更干净、更适合生成的证据子图。
 
 ## 6.1 初始连接子图
 
