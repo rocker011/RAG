@@ -52,6 +52,59 @@ def extract_answer(generation: str) -> str:
         return generation
 
 
+def normalize_token_count(value) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            return int(stripped)
+    return None
+
+
+def normalize_sample_token_fields(sample: dict) -> None:
+    for field in ("consumed_prompt_tokens", "consumed_completion_tokens", "consumed_total_tokens"):
+        sample[field] = normalize_token_count(sample.get(field))
+
+
+def compute_token_usage_summary(data: list[dict]) -> dict:
+    consumed_tokens = []
+    for sample in data:
+        normalize_sample_token_fields(sample)
+        total_tokens = sample.get("consumed_total_tokens")
+        if total_tokens is not None:
+            consumed_tokens.append(total_tokens)
+    return {
+        "avg_consumed_tokens": round(sum(consumed_tokens) / len(consumed_tokens), 4)
+        if consumed_tokens
+        else None,
+        "token_usage_recorded_samples": len(consumed_tokens),
+        "token_usage_total_samples": len(data),
+    }
+
+
+def make_json_serializable(value):
+    if isinstance(value, dict):
+        return {key: make_json_serializable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [make_json_serializable(item) for item in value]
+    if isinstance(value, tuple):
+        return [make_json_serializable(item) for item in value]
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    if hasattr(value, "tolist"):
+        try:
+            return value.tolist()
+        except Exception:
+            pass
+    return value
+
+
 def evaluate_local_metrics(sample: dict) -> dict:
     generation = sample['generation']
     answer = extract_answer(generation)
@@ -154,6 +207,7 @@ def evaluate_method(args):
         else:
             apply_skipped_judge_results(data)
 
+        token_usage_summary = compute_token_usage_summary(data)
         overall_em = sum([sample['em'] for sample in data]) / len(data)
         overall_f1 = sum([sample['f1'] for sample in data]) / len(data)
         overall_rsim = sum([sample['rsim'] for sample in data]) / len(data)
@@ -171,18 +225,22 @@ def evaluate_method(args):
             print(f"{method} Overall Gen: skipped")
         else:
             print(f"{method} Overall Gen: {overall_gen:.4f}")
+        if token_usage_summary["avg_consumed_tokens"] is None:
+            print(f"{method} Avg Consumed Tokens: unavailable")
+        else:
+            print(f"{method} Avg Consumed Tokens: {token_usage_summary['avg_consumed_tokens']:.4f}")
 
         save_base = f"results/{method}/{data_source}"
         os.makedirs(save_base, exist_ok=True)
 
         result_path = os.path.join(save_base, "test_result.json")
         with open(result_path, 'w', encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
+            json.dump(make_json_serializable(data), f, indent=4, ensure_ascii=False)
 
         score_path = os.path.join(save_base, "test_score.json")
         with open(score_path, 'w', encoding="utf-8") as f:
             json.dump(
-                {
+                make_json_serializable({
                     "overall_em": overall_em,
                     "overall_f1": overall_f1,
                     "overall_rsim": overall_rsim,
@@ -190,7 +248,10 @@ def evaluate_method(args):
                     "llm_judge_enabled": enable_llm_judge,
                     "judge_backend": judge_backend_kind,
                     "judge_model": judge_model,
-                },
+                    "avg_consumed_tokens": token_usage_summary["avg_consumed_tokens"],
+                    "token_usage_recorded_samples": token_usage_summary["token_usage_recorded_samples"],
+                    "token_usage_total_samples": token_usage_summary["token_usage_total_samples"],
+                }),
                 f,
                 indent=4,
                 ensure_ascii=False,

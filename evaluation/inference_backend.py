@@ -42,6 +42,7 @@ class InferenceResponse:
     content: str = ""
     error: Optional[str] = None
     raw: Optional[dict[str, Any]] = None
+    usage: Optional[dict[str, Any]] = None
 
 
 class BaseInferenceBackend:
@@ -61,6 +62,7 @@ class RealtimeInferenceBackend(BaseInferenceBackend):
         api_key = ensure_openai_api_key()
         base_url = get_openai_base_url(default="https://api.deepseek.com")
         client_kwargs = {"api_key": api_key}
+        client_kwargs["timeout"] = float(os.getenv("HGRAG_OPENAI_TIMEOUT_SECONDS", "180"))
         if base_url is not None:
             client_kwargs["base_url"] = base_url
         self.client = OpenAI(**client_kwargs)
@@ -79,10 +81,15 @@ class RealtimeInferenceBackend(BaseInferenceBackend):
         try:
             response = self.client.chat.completions.create(**kwargs)
             content = response.choices[0].message.content or ""
+            response_dump = response.model_dump() if hasattr(response, "model_dump") else None
+            usage = normalize_usage_payload(getattr(response, "usage", None))
+            if usage is None and isinstance(response_dump, dict):
+                usage = extract_usage_from_payload(response_dump)
             return InferenceResponse(
                 custom_id=request.custom_id,
                 content=content,
-                raw=response.model_dump() if hasattr(response, "model_dump") else None,
+                raw=response_dump,
+                usage=usage,
             )
         except Exception as exc:
             return InferenceResponse(
@@ -261,12 +268,13 @@ class QiniuBatchInferenceBackend(BaseInferenceBackend):
                     continue
                 payload = json.loads(line)
                 custom_id = payload.get("custom_id") or payload.get("id") or ""
-                content, error = extract_content_from_batch_payload(payload)
+                content, error, usage = extract_content_from_batch_payload(payload)
                 results[custom_id] = InferenceResponse(
                     custom_id=custom_id,
                     content=content,
                     error=error,
                     raw=payload,
+                    usage=usage,
                 )
         return results
 
@@ -275,6 +283,42 @@ def slugify_task_name(task_name: str) -> str:
     task_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", task_name.strip())
     task_name = re.sub(r"-+", "-", task_name).strip("-")
     return task_name or "batch-task"
+
+
+def make_jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if hasattr(value, "model_dump"):
+        return make_jsonable(value.model_dump())
+    if hasattr(value, "dict"):
+        return make_jsonable(value.dict())
+    if isinstance(value, dict):
+        return {str(key): make_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [make_jsonable(item) for item in value]
+    return str(value)
+
+
+def normalize_usage_payload(usage: Any) -> Optional[dict[str, Any]]:
+    normalized = make_jsonable(usage)
+    return normalized if isinstance(normalized, dict) else None
+
+
+def extract_usage_from_payload(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return None
+
+    usage = normalize_usage_payload(payload.get("usage"))
+    if usage is not None:
+        return usage
+
+    for key in ("response", "body", "result"):
+        child = payload.get(key)
+        if isinstance(child, dict):
+            usage = extract_usage_from_payload(child)
+            if usage is not None:
+                return usage
+    return None
 
 
 def extract_text_from_response_body(body: dict[str, Any]) -> str:
@@ -302,45 +346,53 @@ def extract_text_from_response_body(body: dict[str, Any]) -> str:
     return ""
 
 
-def extract_content_from_batch_payload(payload: dict[str, Any]) -> tuple[str, Optional[str]]:
+def extract_content_from_batch_payload(
+    payload: dict[str, Any],
+) -> tuple[str, Optional[str], Optional[dict[str, Any]]]:
     if not isinstance(payload, dict):
-        return "", "invalid_batch_output_record"
+        return "", "invalid_batch_output_record", None
+
+    usage = extract_usage_from_payload(payload)
 
     if payload.get("error"):
         if isinstance(payload["error"], dict):
-            return "", payload["error"].get("message") or json.dumps(payload["error"], ensure_ascii=False)
-        return "", str(payload["error"])
+            return (
+                "",
+                payload["error"].get("message") or json.dumps(payload["error"], ensure_ascii=False),
+                usage,
+            )
+        return "", str(payload["error"]), usage
 
     response = payload.get("response")
     if isinstance(response, dict):
         if response.get("error"):
             err = response["error"]
             if isinstance(err, dict):
-                return "", err.get("message") or json.dumps(err, ensure_ascii=False)
-            return "", str(err)
+                return "", err.get("message") or json.dumps(err, ensure_ascii=False), usage
+            return "", str(err), usage
         body = response.get("body")
         content = extract_text_from_response_body(body) if isinstance(body, dict) else ""
         if content:
-            return content, None
+            return content, None, usage
 
     body = payload.get("body")
     if isinstance(body, dict):
         content = extract_text_from_response_body(body)
         if content:
-            return content, None
+            return content, None, usage
 
     result = payload.get("result")
     if isinstance(result, dict):
         content = extract_text_from_response_body(result)
         if content:
-            return content, None
+            return content, None, usage
     if isinstance(result, str):
-        return result, None
+        return result, None, usage
 
     if isinstance(payload.get("content"), str):
-        return payload["content"], None
+        return payload["content"], None, usage
 
-    return "", "unable_to_extract_batch_content"
+    return "", "unable_to_extract_batch_content", usage
 
 
 def get_backend(kind: Optional[str] = None) -> BaseInferenceBackend:

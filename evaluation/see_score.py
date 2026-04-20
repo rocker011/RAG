@@ -27,7 +27,8 @@ score_dictr ={
     # "em": copy.deepcopy(score_dictr1),
     "f1": copy.deepcopy(score_dictr1),
     "rsim": copy.deepcopy(score_dictr1),
-    "gen": copy.deepcopy(score_dictr1)
+    "gen": copy.deepcopy(score_dictr1),
+    "consumed_total_tokens": copy.deepcopy(score_dictr1),
 }
 
 
@@ -41,6 +42,24 @@ def format_percent(value):
     if value is None:
         return "N/A"
     return round(value * 100, 2)
+
+
+def format_metric_value(metric_name, value):
+    if metric_name == "consumed_total_tokens":
+        if value is None:
+            return "N/A"
+        return round(value, 2)
+    return format_percent(value)
+
+
+def format_config_value(key, value):
+    if key in {"llm_judge_enabled", "judge_backend", "judge_model"}:
+        return value
+    if key in {"avg_consumed_tokens", "token_usage_recorded_samples", "token_usage_total_samples"}:
+        if value is None:
+            return "N/A"
+        return round(value, 2) if isinstance(value, float) else value
+    return format_percent(value)
     
 for d in data:
     if d["nary"] == 2:
@@ -63,16 +82,13 @@ print("Score Dictionary:")
 for key in score_dictr1:
     print(key)
     for k in score_dictr.keys():
-        print(k, format_percent(score_dictr[k][key]))
+        print(k, format_metric_value(k, score_dictr[k][key]))
     print("=====================================")
 
 print("overall")
 for key in config.keys():
     if key != "overall_em":
-        if key in {"llm_judge_enabled", "judge_backend", "judge_model"}:
-            print(key, config[key])
-        else:
-            print(key, format_percent(config[key]))
+        print(key, format_config_value(key, config[key]))
 print("=====================================")
 
     

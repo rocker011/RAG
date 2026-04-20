@@ -186,6 +186,7 @@ plot/*
 evaluation/contexts/*
 evaluation/datasets/*
 evaluation/expr/*
+evaluation/expr_official_graphrag/*
 evaluation/results/*
 api_config.txt
 evaluation/HyperGraphRAG-contexts-and-datasets.zip

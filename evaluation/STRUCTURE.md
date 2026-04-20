@@ -13,6 +13,7 @@ evaluation/
 │  ├─ hypergraphrag.py
 │  ├─ swhc.py
 │  ├─ graphrag.py
+│  ├─ graphrag_official_common.py
 │  ├─ standardrag.py
 │  ├─ naivegeneration.py
 │  └─ README.md
@@ -20,6 +21,7 @@ evaluation/
 ├─ contexts/                   # raw corpora for graph construction (gitignored)
 ├─ datasets/                   # QA benchmark files (gitignored)
 ├─ expr/                       # built indexes / graph caches (gitignored)
+├─ expr_official_graphrag/     # Microsoft official GraphRAG workspaces (gitignored)
 ├─ results/                    # method outputs and scores (gitignored)
 ├─ get_generation.py           # Step3
 ├─ get_score.py                # Step4
@@ -69,6 +71,17 @@ evaluation/results/<Method>/<dataset>/
 └─ test_score.json
 ```
 
+Result file notes:
+- `test_generation.json` may include:
+  - `generation_usage`
+  - `consumed_prompt_tokens`
+  - `consumed_completion_tokens`
+  - `consumed_total_tokens`
+- `test_score.json` may include:
+  - `avg_consumed_tokens`
+  - `token_usage_recorded_samples`
+  - `token_usage_total_samples`
+
 Recommended method names:
 
 - `NaiveGeneration`
@@ -80,6 +93,10 @@ Recommended method names:
 - `PathRAG`
 - `HyperGraphRAG`
 - `SWHC`
+
+Current naming note:
+- `GraphRAG` now refers to the **Microsoft official GraphRAG** baseline in the evaluation chain
+- the old internal `subgraph_selector="graphrag"` path is development-only reference and should not be treated as the reported `GraphRAG` baseline
 
 ## Planned method file convention
 
@@ -95,6 +112,11 @@ Recommended future filenames:
 - `evaluation/methods/hybrid_rag.py`
 - `evaluation/methods/lightrag.py`
 - `evaluation/methods/pathrag.py`
+
+Official GraphRAG support files:
+
+- `evaluation/methods/graphrag_official_common.py`
+- `evaluation/script_graphrag_index.py`
 
 ## Logs and runs
 
@@ -135,4 +157,25 @@ Example:
 
 ```text
 evaluation/debug/hypertension/run_step1_debug.py
+```
+
+## Official GraphRAG workspace convention
+
+Official GraphRAG indexes are isolated from the existing `expr/<dataset>` HyperGraphRAG workspaces:
+
+```text
+evaluation/expr_official_graphrag/<dataset>/
+├─ input/
+│  └─ documents.json
+├─ prompts/
+├─ settings.yaml
+├─ .env
+├─ output/
+│  ├─ entities.parquet
+│  ├─ relationships.parquet
+│  ├─ community_reports.parquet
+│  ├─ text_units.parquet
+│  └─ lancedb/
+├─ cache/
+└─ logs/
 ```

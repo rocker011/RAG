@@ -51,13 +51,25 @@ nohup python script_insert.py --cls hypertension > result_hypertension_insert.lo
 ### Step2. Retrieve Knowledge of HyperGraphRAG
 ```bash
 python script_hypergraphrag.py --data_source hypertension
+# python script_graphrag.py --data_source hypertension
 # python script_standardrag.py --data_source hypertension
 # python script_naivegeneration.py --data_source hypertension
+```
+
+### Step1b. Build Official GraphRAG Index
+Before running the official `GraphRAG` baseline with the current local embedding default, expose the embedding model through an OpenAI-compatible endpoint and set:
+
+```bash
+export HGRAG_GRAPHRAG_EMBED_API_BASE=http://127.0.0.1:11434/v1
+export HGRAG_GRAPHRAG_EMBED_MODEL=qwen3-embedding:0.6b
+export HGRAG_GRAPHRAG_EMBED_API_KEY=ollama
+python script_graphrag_index.py --data_source hypertension
 ```
 
 ### Step3. Generate Based on Retrieved Knowledge
 ```bash
 python get_generation.py --data_sources hypertension --methods HyperGraphRAG
+# python get_generation.py --data_sources hypertension --methods GraphRAG
 # python get_generation.py --data_sources hypertension --methods StandardRAG
 # python get_generation.py --data_sources hypertension --methods NaiveGeneration
 ```
@@ -65,6 +77,7 @@ python get_generation.py --data_sources hypertension --methods HyperGraphRAG
 ### Step4. Evaluate the Generation
 ```bash
 CUDA_VISIBLE_DEVICES=0 python get_score.py --data_source hypertension --method HyperGraphRAG
+# CUDA_VISIBLE_DEVICES=0 python get_score.py --data_source hypertension --method GraphRAG
 # CUDA_VISIBLE_DEVICES=0 python get_score.py --data_source hypertension --method StandardRAG
 # CUDA_VISIBLE_DEVICES=0 python get_score.py --data_source hypertension --method NaiveGeneration
 ```
@@ -72,6 +85,7 @@ CUDA_VISIBLE_DEVICES=0 python get_score.py --data_source hypertension --method H
 ### Step5. See Evaluation Results
 ```bash
 python see_score.py --data_source hypertension --method HyperGraphRAG
+# python see_score.py --data_source hypertension --method GraphRAG
 # python see_score.py --data_source hypertension --method StandardRAG
 # python see_score.py --data_source hypertension --method NaiveGeneration
 ```
