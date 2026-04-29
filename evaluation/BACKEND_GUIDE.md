@@ -24,17 +24,20 @@ That means we can keep the same model choice whether we use realtime or batch.
 
 ## Recommended model policy
 
-Default models are:
+Default model selection now follows `api_config.txt` unless environment variables override it.
 
-- generation: `deepseek-chat`
-- judge: `deepseek-reasoner`
+Current verified realtime configuration is:
+
+- API base: `https://ai.butel.com/api`
+- generation: `gpt-5.4-mini-hy`
+- judge: by default the same configured chat model, currently `gpt-5.4-mini-hy`
 
 Rationale:
 
-- `deepseek-chat` is the default generation model when using the official DeepSeek API.
-- `deepseek-reasoner` is the default judge model for rubric-based evaluation.
-- When using the official DeepSeek API on `https://api.deepseek.com`, use the `realtime` backend.
-- The old `batch` backend depends on Qiniu-specific `/batchjob/inference` endpoints and is not available on the official DeepSeek API.
+- the evaluation helpers now read the default chat model from `api_config.txt`, so changing `api_config.txt` updates Step3 and Step4 realtime defaults together
+- if you want a separate judge model, set `HGRAG_JUDGE_MODEL` explicitly
+- the current verified endpoint is OpenAI-compatible and works with the `realtime` backend
+- the old `batch` backend still depends on Qiniu-specific `/batchjob/inference` endpoints and therefore requires a different provider path plus one of the supported batch models
 
 If you want maximum comparability across runs, keep these model settings fixed for **all** methods.
 
@@ -51,8 +54,10 @@ If you want maximum comparability across runs, keep these model settings fixed f
 
 ### Model selection
 
-- `HGRAG_GENERATION_MODEL=deepseek-chat`
-- `HGRAG_JUDGE_MODEL=deepseek-reasoner`
+- `HGRAG_GENERATION_MODEL=<model>`
+  - default: current `api_config.txt` chat model
+- `HGRAG_JUDGE_MODEL=<model>`
+  - default: same as the generation model unless explicitly overridden
 
 ### Realtime worker knobs
 
@@ -107,8 +112,6 @@ This is useful when that folder is already served or synced to your public URL h
 
 ```powershell
 $env:HGRAG_INFERENCE_BACKEND='realtime'
-$env:HGRAG_GENERATION_MODEL='deepseek-chat'
-$env:HGRAG_JUDGE_MODEL='deepseek-reasoner'
 python get_generation.py --data_sources hypertension --methods HyperGraphRAG,SWHC
 python get_score.py --data_source hypertension --method HyperGraphRAG
 ```
@@ -118,8 +121,8 @@ python get_score.py --data_source hypertension --method HyperGraphRAG
 ```powershell
 $env:HGRAG_GENERATION_BACKEND='realtime'
 $env:HGRAG_JUDGE_BACKEND='batch'
-$env:HGRAG_GENERATION_MODEL='deepseek-chat'
-$env:HGRAG_JUDGE_MODEL='deepseek-reasoner'
+$env:HGRAG_GENERATION_MODEL='gpt-5.4-mini-hy'
+$env:HGRAG_JUDGE_MODEL='<supported-qiniu-batch-model>'
 $env:HGRAG_BATCH_INPUT_URL_TEMPLATE='https://your-public-host/hgrag-batch/{task_name}/{filename}'
 python get_generation.py --data_sources hypertension --methods GraphRAG
 python get_score.py --data_source hypertension --method GraphRAG
@@ -129,8 +132,8 @@ python get_score.py --data_source hypertension --method GraphRAG
 
 ```powershell
 $env:HGRAG_INFERENCE_BACKEND='batch'
-$env:HGRAG_GENERATION_MODEL='deepseek-chat'
-$env:HGRAG_JUDGE_MODEL='deepseek-reasoner'
+$env:HGRAG_GENERATION_MODEL='<supported-qiniu-batch-model>'
+$env:HGRAG_JUDGE_MODEL='<supported-qiniu-batch-model>'
 $env:HGRAG_BATCH_INPUT_URL_TEMPLATE='https://your-public-host/hgrag-batch/{task_name}/{filename}'
 python get_generation.py --data_sources hypertension --methods StandardRAG
 python get_score.py --data_source hypertension --method StandardRAG
@@ -152,7 +155,9 @@ These files help debug failed jobs and preserve exact prompts used for batch sub
 
 ## Current limitation
 
-If you switch fully to the official DeepSeek API, treat `realtime` as the supported backend.
+If your current `api_config.txt` points to `https://ai.butel.com/api`, treat `realtime` as the supported backend.
+
+The current GPT-5.4-compatible endpoint was only verified on the realtime OpenAI-compatible chat-completions path.
 
 The batch backend assumes you already have a way to expose the staged JSONL file as a public URL.
 The code prepares the file and submits the job, but it does not include a cloud uploader yet.

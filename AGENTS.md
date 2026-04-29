@@ -211,9 +211,12 @@ Interpretation:
 - Conda env: `hypergraphrag`
 
 ### API / model defaults
-- API base: `https://api.deepseek.com`
-- Main chat model: `deepseek-chat`
-- Judge model: `deepseek-reasoner`
+- API / model defaults are read from `api_config.txt`
+- Current verified API base: `https://ai.butel.com/api`
+- Current verified main chat model: `gpt-5.4-mini-hy`
+- Judge model:
+  - by default follows the same configured chat model
+  - if a separate judge model is needed, override it with `HGRAG_JUDGE_MODEL`
 - Embedding: local `Qwen/Qwen3-Embedding-0.6B`
 
 Do not reintroduce the old Qiniu-specific batch path unless explicitly requested.

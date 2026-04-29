@@ -1105,3 +1105,53 @@ The next experiments that should be logged here are:
 1. `BM25` resumed `hypertension` Step3 completion after DeepSeek balance recovery
 2. refreshed six-method comparison after `BM25` completion
 3. first public dataset adapter run
+
+## 2026-04-29 - Infrastructure - GPT-5.4 API config verification and default-model alignment
+
+- Goal:
+  - verify whether the updated `api_config.txt` can drive the evaluation stack with `gpt-5.4`
+  - align Step3 / Step4 default model selection with `api_config.txt` so the runtime behavior matches the current config documentation
+- Code version:
+  - Git commit: not recorded
+  - Branch: not recorded
+- Command:
+  - direct config inspection only
+  - realtime smoke test with explicit model:
+    - `RealtimeInferenceBackend`
+    - prompt: `Reply with exactly: GPT54_OK`
+  - realtime smoke test through the default helper path after the code fix:
+    - `get_generation_model()`
+    - prompt: `Reply with exactly: DEFAULT_OK`
+- Config:
+  - API base: `https://ai.butel.com/api`
+  - Main chat model from `api_config.txt`: `gpt-5.4-mini-hy`
+  - Judge model default after code alignment: follows the same configured chat model unless `HGRAG_JUDGE_MODEL` overrides it
+  - Embedding: local `Qwen/Qwen3-Embedding-0.6B`
+  - LLM judge: not used in this smoke test
+- Code changes:
+  - `evaluation/inference_backend.py`
+    - change Step3 / Step4 default generation and judge model fallback to `get_openai_model(...)`, so they now read `api_config.txt` by default instead of staying pinned to the old hard-coded DeepSeek defaults
+  - docs updated:
+    - `AGENTS.md`
+    - `TASK.md`
+    - `evaluation/BACKEND_GUIDE.md`
+- Result summary:
+  - config loader resolves:
+    - API base: `https://ai.butel.com/api`
+    - main chat model: `gpt-5.4-mini-hy`
+    - embedding model: `local:Qwen/Qwen3-Embedding-0.6B`
+  - explicit realtime smoke test succeeded:
+    - reply matched exactly: `GPT54_OK`
+    - usage: prompt `13`, completion `7`, total `20`
+  - default-helper realtime smoke test also succeeded after the code fix:
+    - `get_generation_model() = gpt-5.4-mini-hy`
+    - `get_judge_model() = gpt-5.4-mini-hy`
+    - reply matched exactly: `DEFAULT_OK`
+    - usage: prompt `12`, completion `6`, total `18`
+- Outcome:
+  - success
+- Notes:
+  - this was an infrastructure verification and documentation-alignment task only; no dataset experiment was rerun
+  - no `SWHC` formula, objective, or solver behavior was changed
+- Next action:
+  - when future experiments rely on the current default runtime, treat `api_config.txt` as the source of truth for the realtime chat model

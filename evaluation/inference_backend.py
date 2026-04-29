@@ -17,10 +17,15 @@ from openai import OpenAI
 from hypergraphrag.openai_config import (
     ensure_openai_api_key,
     get_openai_base_url,
+    get_openai_model,
 )
 
-DEFAULT_GENERATION_MODEL = os.getenv("HGRAG_GENERATION_MODEL", "deepseek-chat")
-DEFAULT_JUDGE_MODEL = os.getenv("HGRAG_JUDGE_MODEL", "deepseek-reasoner")
+DEFAULT_GENERATION_MODEL = os.getenv(
+    "HGRAG_GENERATION_MODEL", get_openai_model(default="deepseek-chat")
+)
+DEFAULT_JUDGE_MODEL = os.getenv(
+    "HGRAG_JUDGE_MODEL", get_openai_model(default="deepseek-chat")
+)
 SUPPORTED_BATCH_MODELS = {"deepseek-v3", "deepseek-r1", "deepseek-r1-32b"}
 DEFAULT_BACKEND = os.getenv("HGRAG_INFERENCE_BACKEND", "realtime").strip().lower()
 DEFAULT_BATCH_STAGING_DIR = Path(__file__).resolve().parent / "batch_jobs"

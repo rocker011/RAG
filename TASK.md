@@ -1,6 +1,6 @@
 # TASK.md
 
-Last updated: `2026-04-18`
+Last updated: `2026-04-29`
 
 ## Current phase
 We are in the **research TODO refinement + paper-facing method strengthening** phase.
@@ -26,7 +26,10 @@ Use the completed baseline stack to answer the remaining **method-design and pap
 ## Stable reference point
 - treat the current six-method `hypertension` no-judge table as the default reference snapshot
 - keep `SWHC` as a **query-time evidence assembly** method on top of `HyperGraphRAG`
-- keep `DeepSeek official API` as the default remote API
+- keep API / model defaults sourced from `api_config.txt`
+- current verified remote API base: `https://ai.butel.com/api`
+- current verified main chat model: `gpt-5.4-mini-hy`
+- by default, judge model follows the same configured chat model unless `HGRAG_JUDGE_MODEL` overrides it
 - keep local `Qwen/Qwen3-Embedding-0.6B` as the default embedding
 - keep `LLM judge` off for intermediate work unless a task explicitly requires it
 
@@ -79,9 +82,10 @@ If a task changes the `SWHC` formula, semantic weighting, objective, or solver b
 
 ## Working defaults
 ### Runtime
-- API provider: `DeepSeek official API`
-- Main model: `deepseek-chat`
-- Judge model: `deepseek-reasoner`
+- API / model defaults: read from `api_config.txt`
+- Current verified API base: `https://ai.butel.com/api`
+- Current verified main model: `gpt-5.4-mini-hy`
+- Judge model: by default follows `api_config.txt`; override with `HGRAG_JUDGE_MODEL` if a separate judge is needed
 - Embedding: local `Qwen/Qwen3-Embedding-0.6B`
 
 ### Scoring
