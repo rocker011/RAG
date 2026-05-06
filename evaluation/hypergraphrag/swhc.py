@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections import Counter, deque
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from itertools import combinations
+import re
 from typing import Any
 
 import networkx as nx
@@ -22,6 +23,45 @@ from .utils import (
 class SWHCResult:
     subgraph: nx.Graph
     debug: dict[str, Any]
+
+
+_SOURCE_RERANK_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+_SOURCE_RERANK_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "has",
+    "have",
+    "in",
+    "is",
+    "it",
+    "its",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "their",
+    "this",
+    "to",
+    "was",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "whom",
+    "whose",
+    "with",
+}
 
 
 def _normalize_score_map(score_map: dict[str, float]) -> dict[str, float]:
@@ -56,6 +96,40 @@ def _iter_source_ids(source_id_value: Any) -> list[str]:
         for source_id in split_string_by_multi_markers(str(source_id_value), [GRAPH_FIELD_SEP])
         if source_id
     ]
+
+
+def _source_rerank_tokens(text: str) -> set[str]:
+    tokens = _SOURCE_RERANK_TOKEN_PATTERN.findall((text or "").lower())
+    return {
+        token
+        for token in tokens
+        if len(token) > 1 and token not in _SOURCE_RERANK_STOPWORDS
+    }
+
+
+def _query_source_overlap(query_tokens: set[str], source_tokens: set[str]) -> float:
+    if not query_tokens or not source_tokens:
+        return 0.0
+    return len(query_tokens & source_tokens) / len(query_tokens)
+
+
+def _terminal_search_text(node_id: str) -> str:
+    text = str(node_id or "").replace("<hyperedge>", " ")
+    text = re.sub(r"[_\"'<>]+", " ", text)
+    return " ".join(text.lower().split())
+
+
+def _terminal_mentioned_in_source(terminal_text: str, source_text: str) -> bool:
+    if not terminal_text:
+        return False
+    normalized_source = " ".join((source_text or "").lower().split())
+    if terminal_text in normalized_source:
+        return True
+    terminal_tokens = _source_rerank_tokens(terminal_text)
+    source_tokens = _source_rerank_tokens(normalized_source)
+    if not terminal_tokens:
+        return False
+    return len(terminal_tokens & source_tokens) / len(terminal_tokens) >= 0.8
 
 
 def _copy_path_into_graph(target: nx.Graph, source: nx.Graph, path: list[str]) -> None:
@@ -465,6 +539,7 @@ async def format_swhc_context(
     swhc_result: SWHCResult,
     text_chunks_db: BaseKVStorage[TextChunkSchema],
     query_param: QueryParam,
+    query_text: str = "",
 ) -> tuple[str, str, str]:
     subgraph = swhc_result.subgraph
     if subgraph.number_of_nodes() == 0:
@@ -528,31 +603,79 @@ async def format_swhc_context(
         )
     relations_context = list_of_list_to_csv(relations_section_list)
 
+    terminals = set(swhc_result.debug.get("terminals", []))
+    terminal_texts = {
+        terminal: _terminal_search_text(terminal)
+        for terminal in terminals
+        if subgraph.has_node(terminal)
+    }
+    query_tokens = _source_rerank_tokens(query_text)
+
     source_counter: Counter[str] = Counter()
-    for _, node_data in subgraph.nodes(data=True):
+    source_node_score: Counter[str] = Counter()
+    source_terminal_hits: dict[str, set[str]] = defaultdict(set)
+    for node_id, node_data in subgraph.nodes(data=True):
         for source_id in _iter_source_ids(node_data.get("source_id")):
             source_counter[source_id] += 1
+            source_node_score[source_id] += float(node_scores.get(node_id, 0.0))
+            if node_id in terminals:
+                source_terminal_hits[source_id].add(node_id)
     for _, _, edge_data in subgraph.edges(data=True):
         for source_id in _iter_source_ids(edge_data.get("source_id")):
             source_counter[source_id] += 1
 
     text_units = []
+    max_support = max(source_counter.values(), default=1)
+    max_node_score = max(source_node_score.values(), default=1.0)
     for source_id, support in source_counter.items():
         chunk_data = await text_chunks_db.get_by_id(source_id)
         if chunk_data is None or "content" not in chunk_data:
             continue
+        content = chunk_data["content"]
+        source_tokens = _source_rerank_tokens(content)
+        terminal_hits = set(source_terminal_hits.get(source_id, set()))
+        for terminal, terminal_text in terminal_texts.items():
+            if _terminal_mentioned_in_source(terminal_text, content):
+                terminal_hits.add(terminal)
+        query_overlap = _query_source_overlap(query_tokens, source_tokens)
+        terminal_coverage = len(terminal_hits) / max(len(terminals), 1)
+        support_score = support / max_support
+        node_score = source_node_score[source_id] / max_node_score if max_node_score else 0.0
+        length_penalty = min(len(source_tokens) / 512.0, 2.0)
+        rerank_score = (
+            query_param.swhc_source_support_weight * support_score
+            + query_param.swhc_source_query_weight * query_overlap
+            + query_param.swhc_source_terminal_weight * terminal_coverage
+            + query_param.swhc_source_node_weight * node_score
+            - query_param.swhc_source_length_penalty * length_penalty
+        )
         text_units.append(
             {
                 "id": source_id,
                 "support": support,
-                "content": chunk_data["content"],
+                "content": content,
                 "chunk_order_index": chunk_data.get("chunk_order_index", 0),
+                "rerank_score": rerank_score,
+                "query_overlap": query_overlap,
+                "terminal_coverage": terminal_coverage,
             }
         )
 
-    text_units.sort(
-        key=lambda item: (-item["support"], item["chunk_order_index"], item["id"])
-    )
+    if query_param.swhc_source_rerank:
+        text_units.sort(
+            key=lambda item: (
+                -item["rerank_score"],
+                -item["support"],
+                -item["query_overlap"],
+                -item["terminal_coverage"],
+                item["chunk_order_index"],
+                item["id"],
+            )
+        )
+    else:
+        text_units.sort(
+            key=lambda item: (-item["support"], item["chunk_order_index"], item["id"])
+        )
     text_units = truncate_list_by_token_size(
         text_units,
         key=lambda item: item["content"],

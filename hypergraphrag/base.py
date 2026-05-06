@@ -46,6 +46,12 @@ class QueryParam:
     swhc_enable_prune: bool = True
     swhc_budget_nodes: int = 80
     swhc_return_debug: bool = False
+    swhc_source_rerank: bool = False
+    swhc_source_support_weight: float = 0.75
+    swhc_source_query_weight: float = 2.0
+    swhc_source_terminal_weight: float = 0.75
+    swhc_source_node_weight: float = 0.25
+    swhc_source_length_penalty: float = 0.05
     # GraphRAG-style baseline configuration
     graphrag_seed_topk_entity: int = 8
     graphrag_seed_topk_hyperedge: int = 8

@@ -161,6 +161,12 @@ Current default parameters:
 - $\gamma = 0.05$
 - $\varepsilon = 0.05$
 - $c_{\text{hop}} = 0.25$
+- source rerank at context export:
+  - implemented but disabled by default for the current research path
+  - project convention from `2026-05-06`: keep it off for normal SWHC runs; only enable it for an explicit rerank ablation with `HGRAG_SWHC_SOURCE_RERANK=true`
+  - applies only to `Sources` ordering after the SWHC subgraph is selected
+  - score combines structural support, query/source lexical overlap, terminal coverage, node-score support, and a length penalty
+  - this is a query-time assembly change; SWHC results before and after enabling it are not directly comparable without qualification
 
 ### Method invariants
 When modifying SWHC, preserve these unless explicitly changing the method:

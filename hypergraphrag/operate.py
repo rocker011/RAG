@@ -506,6 +506,15 @@ async def kg_query(
     # Handle cache
     use_model_func = global_config["llm_model_func"]
     cache_mode = f"{query_param.mode}:{query_param.subgraph_selector}"
+    if query_param.subgraph_selector == "swhc":
+        cache_mode = (
+            f"{cache_mode}:source_rerank={int(query_param.swhc_source_rerank)}"
+            f":sw={query_param.swhc_source_support_weight}"
+            f":qw={query_param.swhc_source_query_weight}"
+            f":tw={query_param.swhc_source_terminal_weight}"
+            f":nw={query_param.swhc_source_node_weight}"
+            f":lp={query_param.swhc_source_length_penalty}"
+        )
     args_hash = compute_args_hash(cache_mode, query)
     cached_response, quantized, min_val, max_val = await handle_cache(
         hashing_kv, args_hash, query, cache_mode
@@ -604,6 +613,7 @@ async def kg_query(
         hyperedges_vdb,
         text_chunks_db,
         query_param,
+        original_query=query,
     )
 
     if query_param.only_need_context:
@@ -655,6 +665,7 @@ async def _build_query_context(
     hyperedges_vdb: BaseVectorStorage,
     text_chunks_db: BaseKVStorage[TextChunkSchema],
     query_param: QueryParam,
+    original_query: str | None = None,
 ):
 
     ll_kewwords, hl_keywrds = query[0], query[1]
@@ -709,6 +720,7 @@ async def _build_query_context(
                 swhc_result,
                 text_chunks_db,
                 query_param,
+                query_text=original_query or " ".join(query),
             )
         else:
             (

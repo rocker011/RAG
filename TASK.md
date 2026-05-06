@@ -1,6 +1,6 @@
 # TASK.md
 
-Last updated: `2026-05-05`
+Last updated: `2026-05-06`
 
 ## Current phase
 We are in the **research TODO refinement + paper-facing method strengthening** phase.
@@ -21,6 +21,49 @@ We are in the **research TODO refinement + paper-facing method strengthening** p
   - context mode: `bundle`
   - six-method no-judge table completed under current `api_config.txt` / `gpt-5.4-mini-hy`
   - `0 / 64` generation errors and `64 / 64` token-usage records for every method
+- SWHC source rerank has been implemented after the `hotpotqa_64` fairness analysis:
+  - only changes query-time `Sources` ordering after the SWHC subgraph is selected
+  - does not change indexing, entity extraction, hyperedge construction, or the connector solver
+  - first post-rerank `hotpotqa_64` no-judge SWHC rerun is complete:
+    - `EM = 37.50`
+    - `F1 = 59.93`
+    - `R-Sim = 66.72`
+    - average consumed tokens `3047.95`
+    - support-sentence recall improved slightly from `127 / 158` to `128 / 158`, but final answer metrics did not improve
+- SWHC shortest-answer-span prompt diagnostic is complete on `hotpotqa_64` with source rerank disabled:
+  - same no-rerank `test_knowledge.json`
+  - normal prompt:
+    - `EM = 39.06`
+    - `F1 = 59.38`
+  - shortest-span prompt:
+    - `EM = 75.00`
+    - `F1 = 85.42`
+  - interpretation:
+    - a large share of the apparent SWHC exact-answer gap on HotPotQA_64 is answer-format / verbosity, not retrieval alone
+    - if this prompt is used in a fair table, it must be applied consistently to all methods
+- six-method shortest-answer-span rerun is complete on `hotpotqa_64`:
+  - only Step3/Step4 were rerun; existing `test_knowledge.json` files were reused
+  - `SWHC` used default no-rerank
+  - all methods have `0 / 64` generation errors and `64 / 64` token-usage records
+  - answer-format-controlled no-judge results:
+    - `NaiveGeneration`: `EM = 37.50`, `F1 = 51.35`, tokens `262.48`
+    - `StandardRAG`: `EM = 71.88`, `F1 = 84.56`, tokens `11735.27`
+    - `HybridRAG`: `EM = 71.88`, `F1 = 86.40`, tokens `11740.41`
+    - `GraphRAG`: `EM = 59.38`, `F1 = 72.84`, tokens `5390.42`
+    - `HyperGraphRAG`: `EM = 68.75`, `F1 = 87.24`, tokens `17610.14`
+    - `SWHC`: `EM = 71.88`, `F1 = 83.34`, tokens `3184.52`
+  - interpretation:
+    - shortest-answer prompting is a separate evaluation protocol and should not be mixed with the original normal-prompt table
+    - SWHC is now close to StandardRAG / HybridRAG in answer metrics while using much less context
+    - remaining SWHC misses are mostly retrieval / specificity misses, not answer-format misses
+- current SWHC error diagnosis after shortest-answer control:
+  - `18 / 64` SWHC samples are non-EM under the active shortest-answer run
+  - in those `18` non-EM samples, the gold answer appears in `Sources` for `18 / 18`, but only in `Entities` for `2 / 18` and `Relationships` for `4 / 18`
+  - in the `8` zero-F1 hard errors, gold appears in `Sources` for `8 / 8`, but in `Relationships` for only `1 / 8`
+  - conclusion:
+    - SWHC often retrieves text containing the answer, but the answer remains buried in source text instead of being lifted into structured evidence
+    - the generator can be pulled toward stronger-looking but incomplete `Entities` / `Relationships` signals
+    - next retrieval-side work should prioritize query-aware evidence compression / answer-candidate exposure over source rerank
 - `BM25` still only has a partial lower-bound no-judge result after the earlier `402 Insufficient Balance`
   - treat it as a maintenance item, not the current main task
 - the current comparison note lives at:
@@ -41,6 +84,8 @@ Use the completed baseline stack to answer the remaining **method-design and pap
 - keep `LLM judge` off for intermediate work unless a task explicitly requires it
 
 If a task changes the `SWHC` formula, semantic weighting, objective, or solver behavior, say explicitly that older `SWHC` results may no longer be directly comparable.
+Source rerank is now a disabled-by-default ablation option. Normal future `SWHC` runs should be no-rerank unless the task explicitly requests `HGRAG_SWHC_SOURCE_RERANK=true`; do not repeat this decision in routine experiment notes.
+If a task explicitly reruns `SWHC` with source rerank enabled, say that older pre-rerank `SWHC` result rows are not directly comparable to the new row without qualification.
 
 ## Active priorities
 ### P0
@@ -108,6 +153,11 @@ Treat the following as the current `SWHC` reference setup:
 - $\gamma = 0.05$
 - $\varepsilon = 0.05$
 - $c_{\text{hop}} = 0.25$
+- source rerank:
+  - implemented but disabled by default
+  - normal future `SWHC` runs should leave it off
+  - can be enabled only for explicit ablation with `HGRAG_SWHC_SOURCE_RERANK=true`
+  - source score combines structural support, query/source lexical overlap, terminal coverage, node-score support, and length penalty
 
 ## Checks
 Typical no-judge scoring command:

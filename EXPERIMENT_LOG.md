@@ -1244,3 +1244,422 @@ The next experiments that should be logged here are:
   - no `SWHC` formula, semantic weighting, objective, or solver behavior was changed
 - Next action:
   - use this result to decide whether the next HotPotQA run should scale to `512` bundle samples or switch to a stricter title-level corpus
+
+## 2026-05-06 - SWHC - source rerank implementation - code change
+
+- Goal:
+  - add answer-aware / question-aware source reranking to SWHC context export after the `hotpotqa_64` fairness analysis
+  - keep SWHC as a query-time evidence assembly method and avoid changing indexing or graph construction
+- Code version:
+  - Git commit before change:
+    - `558a797 chore: record hotpotqa pilot state`
+  - Branch:
+    - `main`
+- Command:
+  - code change only
+  - syntax check:
+    - `python -m py_compile evaluation/hypergraphrag/base.py evaluation/hypergraphrag/operate.py evaluation/hypergraphrag/swhc.py evaluation/methods/swhc.py hypergraphrag/base.py hypergraphrag/operate.py hypergraphrag/swhc.py`
+  - local in-memory smoke test:
+    - constructed a tiny SWHC subgraph with two candidate sources and verified that the question-matching source is ordered first
+- Config:
+  - API/model:
+    - not used
+  - Embedding:
+    - not used
+  - LLM judge:
+    - not used
+  - Seed:
+    - not applicable
+  - Other params:
+    - `swhc_source_rerank = True`
+    - `swhc_source_support_weight = 0.75`
+    - `swhc_source_query_weight = 2.0`
+    - `swhc_source_terminal_weight = 0.75`
+    - `swhc_source_node_weight = 0.25`
+    - `swhc_source_length_penalty = 0.05`
+    - ablation switch:
+      - `HGRAG_SWHC_SOURCE_RERANK=false`
+- Output:
+  - Files changed:
+    - `evaluation/hypergraphrag/base.py`
+    - `evaluation/hypergraphrag/operate.py`
+    - `evaluation/hypergraphrag/swhc.py`
+    - `evaluation/methods/swhc.py`
+    - root package alignment under `hypergraphrag/`
+    - `AGENTS.md`
+    - `TASK.md`
+- Result summary:
+  - no dataset was rerun
+  - no new `test_knowledge.json`, `test_generation.json`, or `test_score.json` result was produced
+  - SWHC `Sources` are now sorted by a weighted score combining:
+    - structural support count
+    - query/source lexical overlap
+    - terminal coverage
+    - selected-node score support
+    - source length penalty
+- Outcome:
+  - implementation complete
+  - syntax check passed
+  - local in-memory source-ordering smoke test passed
+- Notes:
+  - this changes SWHC query-time context assembly behavior
+  - SWHC rows produced before this change are not directly comparable to post-rerank SWHC rows without qualification
+  - the SWHC connector objective and solver are unchanged
+- Next action:
+  - rerun SWHC Step2 on `hotpotqa_64` and compare support-sentence recall, full-support sample count, average source count, and average context tokens before launching Step3 generation
+
+## 2026-05-06 - SWHC - hotpotqa_64 - post-source-rerank Step2~Step4
+
+- Goal:
+  - rerun SWHC on `hotpotqa_64` after enabling source rerank
+  - compare whether source rerank improves support recall and no-judge answer metrics
+- Code version:
+  - Git commit before source-rerank implementation:
+    - `558a797 chore: record hotpotqa pilot state`
+  - Branch:
+    - `main`
+- Command:
+  - pre-rerank baseline read from existing result files
+  - `set HGRAG_SWHC_SOURCE_RERANK=true`
+  - `set HGRAG_OPENAI_TIMEOUT_SECONDS=180`
+  - `conda run -n hypergraphrag python script_swhc.py --data_source hotpotqa_64`
+  - `set HGRAG_FORCE_REGENERATE=true`
+  - `set HGRAG_GENERATION_WORKERS=2`
+  - `conda run -n hypergraphrag python get_generation.py --data_sources hotpotqa_64 --methods SWHC`
+  - `set HGRAG_ENABLE_LLM_JUDGE=false`
+  - `set HGRAG_SCORE_WORKERS=4`
+  - `conda run -n hypergraphrag python get_score.py --data_source hotpotqa_64 --method SWHC --enable_llm_judge false`
+- Config:
+  - API base:
+    - `https://ai.butel.com/api`
+  - Main chat model:
+    - `gpt-5.4-mini-hy`
+  - Embedding:
+    - local `Qwen/Qwen3-Embedding-0.6B`
+  - LLM judge:
+    - `off`
+  - Seed:
+    - not recorded
+  - Other params:
+    - `swhc_source_rerank = True`
+    - `swhc_source_support_weight = 0.75`
+    - `swhc_source_query_weight = 2.0`
+    - `swhc_source_terminal_weight = 0.75`
+    - `swhc_source_node_weight = 0.25`
+    - `swhc_source_length_penalty = 0.05`
+- Output:
+  - Directory:
+    - `evaluation/results/SWHC/hotpotqa_64/`
+  - Files:
+    - `test_knowledge.json`
+    - `test_generation.json`
+    - `test_result.json`
+    - `test_score.json`
+- Result summary:
+  - pre-rerank current-file baseline:
+    - `EM = 39.06`
+    - `F1 = 61.20`
+    - `R-Sim = 67.30`
+    - average consumed tokens `3036.39`
+    - support-sentence recall `127 / 158 = 0.8038`
+    - full-support samples `41 / 64`
+    - average sources `2.53`
+  - post-rerank:
+    - `EM = 37.50`
+    - `F1 = 59.93`
+    - `R-Sim = 66.72`
+    - average consumed tokens `3047.95`
+    - support-sentence recall `128 / 158 = 0.8101`
+    - full-support samples `42 / 64`
+    - average sources `2.58`
+    - generation errors `0 / 64`
+    - token-usage records `64 / 64`
+- Outcome:
+  - mixed / not an answer-quality improvement
+- Notes:
+  - source rerank slightly improved retrieval-side support coverage without materially increasing sources or tokens
+  - final no-judge answer metrics decreased slightly, likely because the retrieval gain was too small and generation exactness/noise still dominates several samples
+  - this run changes SWHC query-time assembly behavior, so it should not be mixed as directly comparable with older pre-rerank SWHC rows without qualification
+- Next action:
+  - do not scale this exact rerank to `hotpotqa_512` yet
+  - next useful ablation is either:
+    - add a shortest-answer generation prompt for all methods / or at least as a same-knowledge SWHC diagnostic
+    - tune rerank/source expansion to add answer-oriented sources rather than only reorder the existing selected source set
+
+## 2026-05-06 - SWHC - hotpotqa_64 - no-rerank shortest-answer-span diagnostic
+
+- Goal:
+  - temporarily avoid source rerank
+  - test whether SWHC's `hotpotqa_64` EM/F1 gap is largely caused by verbose answer formatting rather than retrieval alone
+  - keep the same no-rerank `test_knowledge.json` for a normal-prompt vs shortest-span-prompt comparison
+- Code version:
+  - Git commit before source-rerank implementation:
+    - `558a797 chore: record hotpotqa pilot state`
+  - Branch:
+    - `main`
+- Command:
+  - code change:
+    - added optional generation prompt switch `HGRAG_SHORTEST_ANSWER_SPAN`
+  - syntax check:
+    - `python -m py_compile evaluation/get_generation.py`
+  - no-rerank Step2:
+    - `set HGRAG_SWHC_SOURCE_RERANK=false`
+    - `set HGRAG_OPENAI_TIMEOUT_SECONDS=180`
+    - `conda run -n hypergraphrag python script_swhc.py --data_source hotpotqa_64`
+  - shortest-span Step3~Step4:
+    - `set HGRAG_FORCE_REGENERATE=true`
+    - `set HGRAG_GENERATION_WORKERS=2`
+    - `set HGRAG_OPENAI_TIMEOUT_SECONDS=180`
+    - `set HGRAG_SHORTEST_ANSWER_SPAN=true`
+    - `conda run -n hypergraphrag python get_generation.py --data_sources hotpotqa_64 --methods SWHC`
+    - `set HGRAG_ENABLE_LLM_JUDGE=false`
+    - `set HGRAG_SCORE_WORKERS=4`
+    - `conda run -n hypergraphrag python get_score.py --data_source hotpotqa_64 --method SWHC --enable_llm_judge false`
+  - same-knowledge normal-prompt comparison:
+    - archived the shortest-span result under `evaluation/results/SWHC_NoRerank_ShortestSpan/hotpotqa_64/`
+    - reran Step3~Step4 with `HGRAG_SHORTEST_ANSWER_SPAN` unset
+    - archived the normal-prompt result under `evaluation/results/SWHC_NoRerank_NormalPrompt/hotpotqa_64/`
+    - restored the active `evaluation/results/SWHC/hotpotqa_64/` directory to the shortest-span result
+- Config:
+  - API base:
+    - `https://ai.butel.com/api`
+  - Main chat model:
+    - `gpt-5.4-mini-hy`
+  - Embedding:
+    - local `Qwen/Qwen3-Embedding-0.6B`
+  - LLM judge:
+    - `off`
+  - Seed:
+    - not recorded
+  - Other params:
+    - `swhc_source_rerank = False`
+    - `HGRAG_SHORTEST_ANSWER_SPAN=true` for the diagnostic run
+    - after this diagnostic, source rerank default was changed to `False`; enable it explicitly with `HGRAG_SWHC_SOURCE_RERANK=true` for future rerank ablations
+- Output:
+  - Active shortest-span result:
+    - `evaluation/results/SWHC/hotpotqa_64/`
+  - Archived comparison results:
+    - `evaluation/results/SWHC_NoRerank_ShortestSpan/hotpotqa_64/`
+    - `evaluation/results/SWHC_NoRerank_NormalPrompt/hotpotqa_64/`
+  - Files:
+    - `test_knowledge.json`
+    - `test_generation.json`
+    - `test_result.json`
+    - `test_score.json`
+- Result summary:
+  - same no-rerank knowledge file:
+    - support-sentence recall `127 / 158 = 0.8038`
+    - full-support samples `41 / 64`
+    - average sources `2.59`
+    - average entities `4.75`
+    - average relationships `4.61`
+  - normal prompt on the same knowledge:
+    - `EM = 39.06`
+    - `F1 = 59.38`
+    - `R-Sim = 67.01`
+    - average consumed tokens `3110.92`
+    - average answer words `6.14`
+  - shortest-span prompt on the same knowledge:
+    - `EM = 75.00`
+    - `F1 = 85.42`
+    - `R-Sim = 67.01`
+    - average consumed tokens `3183.22`
+    - average answer words `2.31`
+  - pairwise same-knowledge comparison:
+    - shortest-span prompt wins on F1 for `28 / 64` samples
+    - loses on F1 for `3 / 64` samples
+    - ties on `33 / 64` samples
+    - average per-sample F1 delta `+0.2605`
+    - total EM delta `+23`
+  - generation quality:
+    - generation errors `0 / 64`
+    - token usage records `64 / 64`
+- Outcome:
+  - success
+- Notes:
+  - this strongly suggests that a large share of SWHC's apparent `hotpotqa_64` EM/F1 deficit is answer-format / verbosity rather than retrieval alone
+  - because the prompt is a generation-side evaluation protocol change, it must be applied consistently to all methods before producing a fair cross-method table
+  - R-Sim is unchanged because it evaluates gold support context against retrieved `knowledge`, not generated answer text
+  - the current active SWHC `hotpotqa_64` result directory now contains the no-rerank shortest-span run, so do not treat it as the original 2026-05-05 pilot row
+- Next action:
+  - run the shortest-span prompt consistently across the six-method `hotpotqa_64` table if we want a fair answer-format-controlled comparison
+  - separately investigate source expansion / retrieval recall, because shortest-span prompting does not solve missing-evidence cases
+
+## 2026-05-06 - HotPotQA_64 - six-method shortest-answer no-judge rerun
+- Goal:
+  - apply the shortest-answer-span generation protocol consistently across all six existing `hotpotqa_64` methods
+  - rerun only necessary steps: generation and no-judge scoring
+  - keep retrieval / `test_knowledge.json` fixed
+- Commands:
+  - Step3 generation:
+    - `set HGRAG_FORCE_REGENERATE=true`
+    - `set HGRAG_SHORTEST_ANSWER_SPAN=true`
+    - `set HGRAG_SWHC_SOURCE_RERANK=false`
+    - `set HGRAG_GENERATION_WORKERS=2`
+    - `conda run -n hypergraphrag python get_generation.py --data_sources hotpotqa_64 --methods "NaiveGeneration,StandardRAG,HybridRAG,GraphRAG,HyperGraphRAG,SWHC"`
+  - initial retry cleanup:
+    - `NaiveGeneration` sample `41` and `GraphRAG` sample `15` initially hit provider `invalid_prompt`
+    - both were regenerated successfully by rerunning only pending error samples
+  - Step4 scoring:
+    - `set HGRAG_ENABLE_LLM_JUDGE=false`
+    - `set HGRAG_SCORE_WORKERS=4`
+    - `conda run -n hypergraphrag python get_score.py --data_source hotpotqa_64 --method <METHOD> --enable_llm_judge false`
+- Config:
+  - API base:
+    - `https://ai.butel.com/api`
+  - Generation model:
+    - `gpt-5.4-mini-hy`
+  - LLM judge:
+    - `off`
+  - Source rerank:
+    - `SWHC` default no-rerank
+  - Prompt:
+    - shortest final answer span inside `<answer>...</answer>`
+- Output:
+  - active result directories updated under:
+    - `evaluation/results/NaiveGeneration/hotpotqa_64/`
+    - `evaluation/results/StandardRAG/hotpotqa_64/`
+    - `evaluation/results/HybridRAG/hotpotqa_64/`
+    - `evaluation/results/GraphRAG/hotpotqa_64/`
+    - `evaluation/results/HyperGraphRAG/hotpotqa_64/`
+    - `evaluation/results/SWHC/hotpotqa_64/`
+  - generation errors:
+    - `0 / 64` for every method after pending-sample retry
+  - token usage records:
+    - `64 / 64` for every method
+- Result summary:
+  - `NaiveGeneration`:
+    - `EM = 37.50`
+    - `F1 = 51.35`
+    - `R-Sim = 0.00`
+    - average consumed tokens `262.48`
+    - average answer words `2.12`
+  - `StandardRAG`:
+    - `EM = 71.88`
+    - `F1 = 84.56`
+    - `R-Sim = 61.57`
+    - average consumed tokens `11735.27`
+    - average answer words `2.33`
+  - `HybridRAG`:
+    - `EM = 71.88`
+    - `F1 = 86.40`
+    - `R-Sim = 60.28`
+    - average consumed tokens `11740.41`
+    - average answer words `2.31`
+  - `GraphRAG`:
+    - `EM = 59.38`
+    - `F1 = 72.84`
+    - `R-Sim = 68.01`
+    - average consumed tokens `5390.42`
+    - average answer words `2.30`
+  - `HyperGraphRAG`:
+    - `EM = 68.75`
+    - `F1 = 87.24`
+    - `R-Sim = 68.38`
+    - average consumed tokens `17610.14`
+    - average answer words `2.33`
+  - `SWHC`:
+    - `EM = 71.88`
+    - `F1 = 83.34`
+    - `R-Sim = 67.01`
+    - average consumed tokens `3184.52`
+    - average answer words `2.39`
+- Comparison to original `2026-05-05` normal-prompt table:
+  - all methods improved substantially in EM/F1
+  - `SWHC` improved by `+32.81` EM points and `+22.14` F1 points versus the original SWHC row
+  - `NaiveGeneration` also improved by `+23.44` EM points and `+19.01` F1 points, confirming that answer formatting was a global confound
+- SWHC efficiency reading:
+  - compared with `StandardRAG`, SWHC has equal EM, `-1.22` F1, `+5.44` R-Sim, and uses about `27%` of the tokens
+  - compared with `HybridRAG`, SWHC has equal EM, `-3.06` F1, `+6.73` R-Sim, and uses about `27%` of the tokens
+  - compared with `HyperGraphRAG`, SWHC has `+3.12` EM, `-3.90` F1, `-1.37` R-Sim, and uses about `18%` of the tokens
+  - compared with `GraphRAG`, SWHC has `+12.50` EM, `+10.50` F1, `-1.00` R-Sim, and uses about `59%` of the tokens
+- Outcome:
+  - success
+- Notes:
+  - the original six-method table did use a shared generation prompt, but that prompt was not exact-span controlled
+  - shortest-answer prompting should be treated as a separate evaluation protocol
+  - after exact-span control, SWHC is no longer clearly weak on HotPotQA_64: it is close to `StandardRAG` / `HybridRAG` in answer metrics while staying much more compact
+  - remaining SWHC losses are primarily evidence/specificity misses, for example:
+    - `Japan` instead of `Fujioka, Gunma`
+    - `1923` instead of `October 1922`
+    - `Lyndon Johnson` instead of `Nelson Rockefeller`
+    - incomplete or wrong writer list for `Delirium`
+- Next action:
+  - use the six-method shortest-answer table as the answer-format-controlled HotPotQA_64 comparison
+  - keep source rerank off by default
+  - next retrieval-side work should focus on source expansion / terminal-source coverage, not source rerank
+
+## 2026-05-06 - SWHC - hotpotqa_64 - shortest-answer error diagnosis
+- Goal:
+  - inspect the active SWHC shortest-answer result in detail
+  - separate answer-format problems from evidence retrieval, evidence organization, and generator slot-selection problems
+- Input files:
+  - `evaluation/results/SWHC/hotpotqa_64/test_knowledge.json`
+  - `evaluation/results/SWHC/hotpotqa_64/test_generation.json`
+  - `evaluation/results/SWHC/hotpotqa_64/test_result.json`
+  - `evaluation/results/SWHC/hotpotqa_64/test_score.json`
+- Active score:
+  - `EM = 71.88`
+  - `F1 = 83.34`
+  - `R-Sim = 67.01`
+  - average consumed tokens `3184.52`
+- Retrieval / answer-location statistics:
+  - EM hits:
+    - `46 / 64`
+  - non-EM samples:
+    - `18 / 64`
+  - support-sentence recall:
+    - `127 / 158`
+  - full-support samples:
+    - `41 / 64`
+  - gold appears anywhere in SWHC knowledge:
+    - `59 / 64`
+  - among non-EM samples:
+    - gold appears in `Sources`: `18 / 18`
+    - gold appears in `Entities`: `2 / 18`
+    - gold appears in `Relationships`: `4 / 18`
+  - among zero-F1 hard errors:
+    - count: `8 / 64`
+    - gold appears in `Sources`: `8 / 8`
+    - gold appears in `Relationships`: `1 / 8`
+- Interpretation:
+  - SWHC usually retrieves source text containing the answer, even in non-EM cases
+  - the answer span is often not explicitly represented in the structured `Entities` / `Relationships`
+  - because `Entities` and `Relationships` are compact, early, and structure-like, the generator may treat them as stronger evidence than a buried source sentence
+  - this creates wrong-slot errors when sources contain multiple nearby candidates or when a hyperedge captures a neighboring but non-answer fact
+- Representative cases:
+  - `#1`:
+    - gold `Chief of Protocol`
+    - SWHC answer `United States ambassador to Ghana`
+    - source contains both positions, while structure does not lift the exact office
+  - `#15`:
+    - gold `9,984`
+    - SWHC answer `331 million`
+    - source contains Brown County population, but structure emphasizes country-level United States
+  - `#31`:
+    - gold `Fujioka, Gunma`
+    - SWHC answer `Japan`
+    - exact place appears in source but answer collapses to country-level span
+  - `#35`:
+    - gold `October 1922`
+    - SWHC answer `1923`
+    - source contains competing temporal statements
+  - `#44`:
+    - gold `Nelson Rockefeller`
+    - SWHC answer `Lyndon Johnson`
+    - Rockefeller committee evidence exists, but a Vice President Lyndon Johnson committee sentence competes with it
+  - `#54`:
+    - gold `Max Martin, Savan Kotecha and Ilya Salmanzadeh`
+    - SWHC answer `Jim Eliot, Starsmith, Billboard, Justin Parker, MONSTA, Madeon, Mike Spencer`
+    - correct writer sentence appears in source, but a producer hyperedge is more salient
+  - `#61`:
+    - gold `Ronald Shusett`
+    - SWHC answer `Francis Ford Coppola`
+    - correct source sentence exists, but another film-score executive producer cue is more salient
+- Outcome:
+  - documented in `docs/results/hotpotqa_64_no_judge_comparison_2026-05-05.md`
+- Next action:
+  - keep source rerank off by default
+  - prioritize query-aware evidence compression / sentence extraction over selected SWHC sources
+  - expose a short `Relevant Evidence` block before `Entities` / `Relationships` / `Sources`
+  - optionally expose lightweight answer-candidate spans beside selected sources without changing indexing or the SWHC connector solver
