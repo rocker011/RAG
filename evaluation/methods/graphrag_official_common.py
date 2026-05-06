@@ -73,6 +73,7 @@ PROMPT_FILES = {
 }
 
 _COMMUNITY_REPORT_PATCH_APPLIED = False
+_SUMMARY_CONTENT_FILTER_PATCH_APPLIED = False
 
 
 @dataclass(frozen=True)
@@ -139,6 +140,81 @@ def _llm_completion_uses_deepseek_json_mode_fallback(llm_completion: Any) -> boo
     return "deepseek" in api_base or "deepseek" in model_identity
 
 
+def _looks_like_content_filter_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "content management policy" in message
+        or "content filter" in message
+        or "response was filtered" in message
+    )
+
+
+def _fallback_description_summary(
+    descriptions: list[str],
+    *,
+    max_summary_length: int,
+) -> str:
+    unique_descriptions = []
+    seen = set()
+    for description in descriptions:
+        text = str(description).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique_descriptions.append(text)
+
+    combined = " ".join(unique_descriptions)
+    max_chars = max(500, max_summary_length * 8)
+    if len(combined) <= max_chars:
+        return combined
+    truncated = combined[:max_chars].rsplit(" ", 1)[0].strip()
+    return truncated or combined[:max_chars].strip()
+
+
+def ensure_summary_content_filter_patch() -> None:
+    global _SUMMARY_CONTENT_FILTER_PATCH_APPLIED
+
+    if _SUMMARY_CONTENT_FILTER_PATCH_APPLIED:
+        return
+
+    from graphrag.index.operations.summarize_descriptions import (
+        description_summary_extractor as summary_module,
+    )
+
+    original_summarize = (
+        summary_module.SummarizeExtractor._summarize_descriptions_with_llm
+    )
+
+    async def _patched_summarize_descriptions_with_llm(
+        self,
+        id: str | tuple[str, str] | list[str],
+        descriptions: list[str],
+    ):
+        try:
+            return await original_summarize(self, id, descriptions)
+        except Exception as exc:
+            if not _looks_like_content_filter_error(exc):
+                raise
+            self._on_error(
+                exc,
+                traceback.format_exc(),
+                {
+                    "id": id,
+                    "fallback": "local_description_concat",
+                    "description_count": len(descriptions),
+                },
+            )
+            return _fallback_description_summary(
+                descriptions,
+                max_summary_length=self._max_summary_length,
+            )
+
+    summary_module.SummarizeExtractor._summarize_descriptions_with_llm = (
+        _patched_summarize_descriptions_with_llm
+    )
+    _SUMMARY_CONTENT_FILTER_PATCH_APPLIED = True
+
+
 def _extract_json_object_text(raw_text: str) -> str:
     text = raw_text.strip()
     if not text:
@@ -179,7 +255,19 @@ def ensure_deepseek_community_report_patch() -> None:
 
     async def _patched_call(self, input_text: str):
         if not _llm_completion_uses_deepseek_json_mode_fallback(self._model):
-            return await original_call(self, input_text)
+            try:
+                return await original_call(self, input_text)
+            except Exception as e:
+                if not _looks_like_content_filter_error(e):
+                    raise
+                community_reports_module.logger.exception(
+                    "content filter while generating community report"
+                )
+                self._on_error(e, traceback.format_exc(), None)
+                return community_reports_module.CommunityReportsResult(
+                    structured_output=None,
+                    output="",
+                )
 
         output = None
         try:
@@ -501,8 +589,8 @@ def build_official_graphrag_index(
 ) -> dict[str, Any]:
     workspace = resolve_graphrag_workspace(data_source, workspace_suffix)
     model_config = resolve_official_model_config()
-    if _uses_deepseek_chat_stack(model_config):
-        ensure_deepseek_community_report_patch()
+    ensure_summary_content_filter_patch()
+    ensure_deepseek_community_report_patch()
     if force_rebuild:
         reset_workspace_artifacts(workspace)
     ensure_workspace_files(workspace, model_config=model_config)

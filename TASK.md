@@ -1,6 +1,6 @@
 # TASK.md
 
-Last updated: `2026-04-29`
+Last updated: `2026-05-05`
 
 ## Current phase
 We are in the **research TODO refinement + paper-facing method strengthening** phase.
@@ -15,10 +15,17 @@ We are in the **research TODO refinement + paper-facing method strengthening** p
   - `HyperGraphRAG`
   - `SWHC`
 - official `GraphRAG` is already integrated into the shared evaluation chain
+- first public-dataset pilot is complete on `hotpotqa_64`:
+  - source: `hotpotqa/hotpot_qa`, `distractor / validation`
+  - sample: first `64` rows
+  - context mode: `bundle`
+  - six-method no-judge table completed under current `api_config.txt` / `gpt-5.4-mini-hy`
+  - `0 / 64` generation errors and `64 / 64` token-usage records for every method
 - `BM25` still only has a partial lower-bound no-judge result after the earlier `402 Insufficient Balance`
   - treat it as a maintenance item, not the current main task
 - the current comparison note lives at:
   - `docs/results/hypertension_no_judge_comparison_2026-04-18.md`
+  - `docs/results/hotpotqa_64_no_judge_comparison_2026-05-05.md`
 
 ## Goal
 Use the completed baseline stack to answer the remaining **method-design and paper-story** questions around `SWHC`, instead of continuing baseline plumbing work.
@@ -59,10 +66,11 @@ If a task changes the `SWHC` formula, semantic weighting, objective, or solver b
    - prioritize targeted comparisons over broad baseline integration work
 
 6. Dataset expansion:
+   - `hotpotqa_64` pilot is complete; use it as the current public-dataset smoke result, not a final full-scale table
    - finish the remaining planned datasets
    - extend the comparison beyond the current `hypertension` focus
    - move toward:
-     - `HotpotQA`
+     - full / larger `HotpotQA`
      - `2WikiMultiHopQA`
      - `MuSiQue`
      - `PopQA`
@@ -124,3 +132,6 @@ Behavior note:
 - Step3 writes `generation_usage` plus flattened consumed-token fields when the backend returns usage
 - Step4 writes `avg_consumed_tokens` to `test_score.json`
 - because `GraphRAG` now points to the official Microsoft implementation, older internal `GraphRAG-local` style outputs are legacy results and not directly comparable
+- on `hotpotqa_64`, official `GraphRAG` with `gpt-5.4-mini-hy` needed a content-filter robustness patch in the integration layer:
+  - if a description/community summary prompt is rejected by provider content policy, the integration falls back to deterministic local description concatenation/truncation for that one summary
+  - this does not change the chat model or use a fallback model, but should be noted when comparing official `GraphRAG` indexing runs

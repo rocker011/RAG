@@ -1155,3 +1155,92 @@ The next experiments that should be logged here are:
   - no `SWHC` formula, objective, or solver behavior was changed
 - Next action:
   - when future experiments rely on the current default runtime, treat `api_config.txt` as the source of truth for the realtime chat model
+
+## 2026-05-05 - HotPotQA_64 - six-method no-judge pilot with current API config
+
+- Goal:
+  - run the current six-method no-judge evaluation on a small public HotPotQA pilot dataset using the latest `api_config.txt`
+  - do not use a fallback build model; use `gpt-5.4-mini-hy` for build-time LLM calls and answer generation
+- Code version:
+  - Git commit: not recorded
+  - Branch: not recorded
+- Dataset:
+  - source: Hugging Face `hotpotqa/hotpot_qa`
+  - config/split: `distractor / validation`
+  - sample: first `64` rows
+  - context mode: `bundle`
+  - generated files:
+    - `evaluation/datasets/hotpotqa_64/questions.json`
+    - `evaluation/contexts/hotpotqa_64_contexts.json`
+    - `evaluation/datasets/hotpotqa_64/dataset_meta.json`
+- Commands:
+  - `python evaluation/prepare_hotpotqa.py --data_source hotpotqa_64 --sample_size 64 --context_mode bundle`
+  - `set HGRAG_INSERT_LLM_MAX_ASYNC=2`
+  - `set HGRAG_ENTITY_SUMMARY_LLM_MAX_ASYNC=1`
+  - `set HGRAG_OPENAI_TIMEOUT_SECONDS=120`
+  - `python evaluation/script_insert.py --cls hotpotqa_64`
+  - `python evaluation/script_naivegeneration.py --data_source hotpotqa_64`
+  - `python evaluation/script_standardrag.py --data_source hotpotqa_64`
+  - `python evaluation/script_hybrid_rag.py --data_source hotpotqa_64`
+  - `python evaluation/script_hypergraphrag.py --data_source hotpotqa_64`
+  - `python evaluation/script_swhc.py --data_source hotpotqa_64`
+  - `python evaluation/script_graphrag_index.py --data_source hotpotqa_64`
+  - `python evaluation/script_graphrag.py --data_source hotpotqa_64`
+  - `set HGRAG_GENERATION_WORKERS=2`
+  - `python evaluation/get_generation.py --data_sources hotpotqa_64 --methods NaiveGeneration,StandardRAG,HybridRAG,GraphRAG,HyperGraphRAG,SWHC`
+  - `set HGRAG_ENABLE_LLM_JUDGE=false`
+  - `set HGRAG_SCORE_WORKERS=4`
+  - `python evaluation/get_score.py --data_source hotpotqa_64 --method <method> --enable_llm_judge false`
+- Config:
+  - API base: `https://ai.butel.com/api`
+  - Main chat model: `gpt-5.4-mini-hy`
+  - Fallback build model: not used
+  - HyperGraphRAG embedding: local `Qwen/Qwen3-Embedding-0.6B`
+  - official GraphRAG embedding: local Ollama OpenAI-compatible `qwen3-embedding:0.6b`
+  - LLM judge: `off`
+- Code changes:
+  - added `evaluation/prepare_hotpotqa.py`
+    - converts HotPotQA Dataset Viewer rows into project `questions.json` and `contexts.json`
+    - supports `bundle` and `title` context modes
+  - added optional `HGRAG_OPENAI_TIMEOUT_SECONDS` support to `evaluation/hypergraphrag/llm.py`
+  - added official GraphRAG content-filter robustness in `evaluation/methods/graphrag_official_common.py`
+    - normal `gpt-5.4-mini-hy` calls are unchanged
+    - if a summary prompt is rejected by provider content filtering, only that summary falls back to deterministic local description concatenation/truncation
+- Build/index summary:
+  - HyperGraphRAG Step1 completed with `10433` graph nodes and `10195` graph edges
+  - official GraphRAG output tables:
+    - documents: `64`
+    - text units: `110`
+    - entities: `4158`
+    - relationships: `4204`
+    - communities: `571`
+    - community reports: `571`
+  - official GraphRAG build note:
+    - an unpatched run failed in `extract_graph` because one `gpt-5.4-mini-hy` description-summary prompt triggered provider content filtering
+    - after the content-filter fallback patch, the rerun completed with no failed workflows
+    - recorded official GraphRAG chat usage in the successful run: `2046` responses, `1079` cache hits, about `3,872,004` total chat tokens
+- Result summary:
+  - all six methods completed `64 / 64` generations
+  - all six methods have `0` final generation errors
+  - all six methods have token usage for `64 / 64` samples
+  - no-judge scores:
+    - `NaiveGeneration`: EM `14.06`, F1 `32.34`, R-Sim `0.00`, Avg tokens `189.17`
+    - `StandardRAG`: EM `40.62`, F1 `62.07`, R-Sim `61.57`, Avg tokens `11656.72`
+    - `HybridRAG`: EM `37.50`, F1 `60.94`, R-Sim `60.28`, Avg tokens `11661.14`
+    - `GraphRAG`: EM `35.94`, F1 `55.10`, R-Sim `68.01`, Avg tokens `5311.81`
+    - `HyperGraphRAG`: EM `43.75`, F1 `66.56`, R-Sim `68.38`, Avg tokens `17531.95`
+    - `SWHC`: EM `39.06`, F1 `61.20`, R-Sim `67.30`, Avg tokens `3036.39`
+- Output:
+  - result directories:
+    - `evaluation/results/<Method>/hotpotqa_64/`
+  - analysis document:
+    - `docs/results/hotpotqa_64_no_judge_comparison_2026-05-05.md`
+- Outcome:
+  - success
+- Notes:
+  - this is a pilot-scale public dataset result, not a full HotPotQA table
+  - the `bundle` conversion makes each question's distractor context a single document, so flat dense and hybrid baselines have unusually direct access to near-gold context
+  - one `NaiveGeneration` answer prompt initially hit `invalid_prompt`; it was regenerated with an explicit benign-benchmark safety preface and usage was recorded
+  - no `SWHC` formula, semantic weighting, objective, or solver behavior was changed
+- Next action:
+  - use this result to decide whether the next HotPotQA run should scale to `512` bundle samples or switch to a stricter title-level corpus

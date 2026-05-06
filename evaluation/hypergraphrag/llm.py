@@ -60,6 +60,13 @@ def default_embedding_func():
     return local_qwen3_embedding if is_local_embed_model() else openai_embedding
 
 
+def _resolve_openai_timeout() -> float | None:
+    timeout_value = os.getenv("HGRAG_OPENAI_TIMEOUT_SECONDS", "").strip()
+    if not timeout_value:
+        return None
+    return float(timeout_value)
+
+
 def _last_token_pool(last_hidden_states, attention_mask):
     left_padding = bool((attention_mask[:, -1].sum() == attention_mask.shape[0]).item())
     if left_padding:
@@ -134,6 +141,9 @@ async def openai_complete_if_cache(
     client_kwargs = {"api_key": resolved_api_key}
     if resolved_base_url is not None:
         client_kwargs["base_url"] = resolved_base_url
+    resolved_timeout = _resolve_openai_timeout()
+    if resolved_timeout is not None:
+        client_kwargs["timeout"] = resolved_timeout
     openai_async_client = AsyncOpenAI(**client_kwargs)
     kwargs.pop("hashing_kv", None)
     kwargs.pop("keyword_extraction", None)
